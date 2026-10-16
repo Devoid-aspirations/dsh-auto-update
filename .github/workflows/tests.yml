@@ -1,0 +1,68 @@
+# ============================================================
+# 测试套件
+# ============================================================
+# 跑的就是作者本机跑的那条命令（npm test -> node test/run.mjs），所以 CI
+# 的结论和本地结论是同一个结论。
+#
+# 这里**没有安装步骤，也不需要**：整套测试只 import node: 内置模块和本仓库
+# 的文件，没有任何第三方依赖（package.json 里连 devDependencies 都没有）。
+# 少一步安装，就少一个能失败的地方。
+#
+# 两个刻意的选择：
+#
+# 1. 用 test/run.mjs 而不是 `node --test`。后者以管道 stdio 启动子进程，
+#    而 DSH 在受限沙箱里不允许创建管道（EPERM），一个断言都跑不到就挂了。
+#    run.mjs 用 stdio: 'inherit'，所以在普通终端和受限会话里行为一致 ——
+#    「本地过、别处不过」正是这样被消除的。
+#
+# 2. 测试文件里 test/plugin.test.mjs 需要 @deepseek-ai/dsh-tools 可解析
+#    （本仓库用一个 junction 指向 profile 共享的该包）。CI 上没有这个
+#    junction，那条用例会**跳过**：run.mjs 只把非零退出码算作失败，所以
+#    这是一次干净的通过，而不是一次假通过。其余 8 个文件照常全跑。
+name: tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支连推多次时，取消上一次还在跑的任务
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu + windows 而不是只跑一个：这个插件的路径处理有多平台分支
+        # （resolvePnpm / resolveGlobalRoot / onPath），只测 Linux 会漏掉
+        # Windows 那半边。
+        os: [ubuntu-latest, windows-latest]
+        # 20 是最低支持版本（package.json 的 engines），22/24 是当前线
+        node: [20, 22, 24]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Show environment
+        run: node --version
+
+      - name: Run the test suite
+        run: npm test
+
+      - name: Check the package manifest is loadable
+        # 插件以 package.json 的 main/exports 被宿主加载；这一步只确认它没写坏
+        run: node -e "const p = require('./package.json'); if (!p.main || !p.name) process.exit(1); console.log(p.name, p.version)"

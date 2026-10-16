@@ -1,0 +1,33 @@
+# ============================================================
+# dsh-auto-update —— 编辑器约定
+# ============================================================
+# 这些值不是审美偏好，是从现有代码量出来的：整个 lib/ 与 test/ 都是
+# 2 空格缩进、无 tab、文件以换行结尾。写在这里是为了让新代码自动一致，
+# 而不是等到 code review 再改。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Markdown 里行尾两个空格是有意义的硬换行，不能裁掉
+[*.md]
+trim_trailing_whitespace = false
+
+# YAML 缩进敏感，禁止把 tab 当缩进
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+# Windows 批处理对行尾敏感
+[*.{bat,cmd}]
+end_of_line = crlf
+
+# 机器生成，不要手工格式化
+[{package-lock.json,pnpm-lock.yaml}]
+indent_size = 2
+insert_final_newline = true

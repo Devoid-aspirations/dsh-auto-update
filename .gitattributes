@@ -1,0 +1,39 @@
+# ============================================================
+# 行尾与文本判定
+# ============================================================
+# 这个仓库的路径里含非 ASCII 字符（其他、），也在 Windows 上开发过。
+# 行尾如果交给各平台的 core.autocrlf 自行决定，同一个文件在不同机器上
+# 会得到不同结果，而这正是「clone 下来就有差异」的来源。所以在这里显式
+# 定死：仓库内一律 LF，检出也一律 LF。
+* text=auto eol=lf
+
+# 明确的二进制，避免被当成文本做行尾转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.zip  binary
+*.tgz  binary
+
+# ============================================================
+# diff 与语言统计
+# ============================================================
+# lockfile 是机器生成的，diff 没有阅读价值
+package-lock.json  -diff linguist-generated
+pnpm-lock.yaml     -diff linguist-generated
+npm-shrinkwrap.json -diff linguist-generated
+
+# GitHub 的语言统计里，文档与测试不该压过 lib/
+README.md   linguist-documentation
+test/**     linguist-documentation
+scripts/**  linguist-documentation
+
+# ============================================================
+# 归档
+# ============================================================
+# git archive 时给 .gitattributes 自身标出导出属性，避免它被再导出
+.gitattributes export-ignore
+.gitignore     export-ignore
+.github/**     export-ignore
