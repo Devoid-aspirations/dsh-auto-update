@@ -69,7 +69,7 @@ could not register the HTTP surface: webserver: duplicate prefix route "/auto-up
 | 版本 | 只重写 `package.json` 里那一行 `version`，其余字节不动，并留一份 `.bak-<旧版本>` |
 | 打包 | `npm run dist:dir`（可用 `desktop.buildCommand` 换成别的 argv）。**产物正被占用就不动手**：先问 `tasklist` 那个 `<productName>.exe` 在不在跑（Windows 不会让打包器替换正在运行的程序的文件）；同一项目同一时间只允许一次打包（`desktop-build.lock`），超时会连整棵进程树一起杀掉（`taskkill /T`）而不是只杀 `cmd.exe` |
 | 验收 | **不看退出码，看产物**：产物版本必须等于目标版本，而且产物的每个文件都要和项目逐字节对得上（asar 里的条目按 header 记的 offset 取字节比 hash），反过来 `build.files` 声明要打进去、产物里却没有的文件也算不一致 —— "构建成功却打着旧包"、"版本对了但代码是旧的"都正是要抓的失败 |
-| 分发 | 用 `tar -a` 重压绿色版 zip（秒级；没有 tar 时回退 PowerShell `Compress-Archive`），先写 `*.part.zip`、**验完是完整 zip 再改名**：刷新失败时上一版分发包原样留着 |
+| 分发 | 按平台选归档器（Windows：`tar -a`，没有就回退 PowerShell `Compress-Archive`；其他平台：`zip` —— macOS 的 `tar` 不能写 zip，GNU tar 要 1.35+ 才行，所以没有哪个工具能通吃），先写 `*.part.zip`、**验完是完整 zip 再改名**：刷新失败时上一版分发包原样留着 |
 | 记录 | 结论写进 `helper.json` 与状态文件（含用的是哪个产物目录、哪些文件不一致、zip 是否完整），面板和 `auto_update` 工具都能看到；**失败只记录**，不影响 harness 的升级结论 |
 
 产物不假设形状：输出目录取 manifest 的 `build.directories.output`（缺省 `dist`），产物按 electron-builder **真正会写出来的东西**发现 —— 默认 `--win dir` 写的是 `dist/win-unpacked/resources/app.asar`（打包成 asar，目录名跟的是 target 而不是 `productName`），设了 `asar: false` 才是未打包的 `resources/app/package.json`；同一输出目录里有多个产物时**最新的那个**说话（刚跑完的构建就是这次构建的结果），`desktop.zipSource` 可以钉住指定目录名。
