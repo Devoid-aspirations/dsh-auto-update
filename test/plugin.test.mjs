@@ -13,9 +13,11 @@
  */
 
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 import { HELPER_FILE, HELPER_SCHEMA, STATUS_PATH } from '../lib/protocol.js'
@@ -197,6 +199,144 @@ test('a settled failure whose target is the version running now is marked supers
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
     clean(dshHome)
+  }
+})
+
+/**
+ * Drive the plugin in a child process that runs FROM a synthetic harness
+ * installation.
+ *
+ * The running version is read off `process.argv[1]` (see `runningHarnessDir` in
+ * lib/npm.js), so a test started as `node test/plugin.test.mjs` cannot resolve
+ * one — the plugin's own checkout is not a `@deepseek-ai/dsh` package, so
+ * `runningVersion` is null and every rule that compares against it (supersede
+ * included) silently does nothing. Handing the child an argv[1] that sits in a
+ * manifest-carrying `dsh` directory is what makes those rules observable.
+ * @param {string} harnessRoot - directory holding the synthetic `dsh` package.
+ * @param {string} dshHome - the DSH_HOME the child should write to.
+ * @param {{exerciseStatus?: boolean}} [options] - `exerciseStatus` replays the
+ *   status read the panel performs between two ticks, which is what used to
+ *   drop the stored verdict.
+ * @returns {Promise<object>} what the child measured.
+ */
+function reconcileInHarness(harnessRoot, dshHome, options = {}) {
+  // `fileURLToPath` keeps the trailing separator a directory URL resolves to,
+  // and `dirname` counts that separator as a level — resolve the repo directory
+  // directly instead of dirname-ing it back off.
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+  const script = join(repoRoot, 'test', 'support', 'reconcile-once.mjs')
+  return new Promise((settle, fail) => {
+    const child = spawn(process.execPath, [script], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        DSH_HOME: dshHome,
+        DSH_AUTO_UPDATE_HARNESS: harnessRoot,
+        DSH_AUTO_UPDATE_EXERCISE_STATUS: options.exerciseStatus === true ? '1' : '0',
+      },
+    })
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (chunk) => {
+      out += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      err += chunk
+    })
+    child.on('error', fail)
+    child.on('close', (code) => {
+      const line = out.split(/\r?\n/u).find((entry) => entry.startsWith('{'))
+      if (line === undefined) fail(new Error(`no measurement from the child (exit ${code}): ${err || out}`))
+      else settle(JSON.parse(line))
+    })
+  })
+}
+
+/**
+ * Lay out a minimal but real npm installation for the child to run from, so the
+ * plugin lifts `9.9.9` as the running version.
+ * @param {string} root - the scratch directory for this test.
+ * @returns {{harnessRoot: string, dshHome: string}} the paths the child needs.
+ */
+function harnessLayout(root) {
+  const harnessRoot = join(root, 'harness')
+  const harnessDir = join(harnessRoot, 'node_modules', '@deepseek-ai', 'dsh')
+  // `…/node_modules/@deepseek-ai/dsh/lib/bin.js` is the entry the plugin lifts
+  // the running version from.
+  mkdirSync(join(harnessDir, 'lib'), { recursive: true })
+  writeFileSync(join(harnessDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '9.9.9' }))
+  return { harnessRoot, dshHome: join(root, 'home') }
+}
+
+test('a settled helper record is reconciled once, not again on every tick', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-reconcile-'))
+  try {
+    const { harnessRoot, dshHome } = harnessLayout(root)
+
+    const measured = await reconcileInHarness(harnessRoot, dshHome)
+
+    assert.equal(measured.boots, 2, 'the child booted the plugin twice')
+    assert.equal(measured.runningVersion, '9.9.9', 'the synthetic harness is what the plugin sees running')
+    assert.equal(measured.afterFirst, 1, 'the settled failure is announced on the boot that reconciles it')
+    // `helper.json` is frozen by the detached helper when it exits, so reading
+    // it again describes the same run — forever. The real tick runs every 20s,
+    // and this second boot stands in for the next one: it must add nothing.
+    assert.equal(measured.delta, 0, 'a later boot does not reconcile the same frozen record again')
+    assert.equal(measured.rows, 1, 'history still carries exactly one row for it')
+    assert.equal(measured.settled, true, 'and the stored verdict stays settled')
+    assert.equal(measured.supersededBy, '9.9.9', 'with its supersede mark intact')
+  } finally {
+    clean(root)
+  }
+})
+
+test('reading the status between two ticks does not restart the reconcile', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-reconcile-status-'))
+  try {
+    const { harnessRoot, dshHome } = harnessLayout(root)
+
+    // The panel polls the status endpoint, and that read used to copy the
+    // frozen `helper.json` back over the settled record — which un-settled it,
+    // so the next tick reconciled (and logged) the same run again, every 20s
+    // forever.
+    const measured = await reconcileInHarness(harnessRoot, dshHome, { exerciseStatus: true })
+
+    assert.equal(measured.statusExercised, true, 'the child replayed the status read')
+    assert.equal(measured.afterFirst, 1, 'the settled failure is announced once')
+    assert.equal(measured.delta, 0, 'a status read in between does not make the next tick announce it again')
+    assert.equal(measured.rows, 1, 'history still carries exactly one row for it')
+    assert.equal(measured.settled, true, 'the stored verdict is still settled after the status read')
+    assert.equal(measured.supersededBy, '9.9.9', 'and still carries its supersede mark')
+  } finally {
+    clean(root)
+  }
+})
+
+test('the settled verdict survives the restart that follows it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-reconcile-restart-'))
+  try {
+    const { harnessRoot, dshHome } = harnessLayout(root)
+    mkdirSync(dshHome, { recursive: true })
+
+    // Two SEPARATE processes against one DSH_HOME: the first is the boot that
+    // reconciles the record and settles it, the second is the harness coming
+    // back up — which is the case `state.helper` has to be carried across,
+    // because the helper's own file describes the run forever.
+    const first = await reconcileInHarness(harnessRoot, dshHome)
+    const second = await reconcileInHarness(harnessRoot, dshHome)
+
+    assert.equal(first.afterSecond, 1, 'the first process announces the settle once')
+    assert.equal(
+      second.afterSecond,
+      1,
+      'a fresh process re-reading the frozen record announces nothing new',
+    )
+    assert.equal(second.total, 1, 'and the log carries exactly one announce in total')
+    assert.equal(second.rows, 1, 'history still carries exactly one row for it')
+    assert.equal(second.settled, true, 'the restarted instance finds the verdict settled')
+    assert.equal(second.supersededBy, '9.9.9', 'with its supersede mark intact')
+  } finally {
+    clean(root)
   }
 })
 
