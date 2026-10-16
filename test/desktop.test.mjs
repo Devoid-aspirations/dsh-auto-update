@@ -604,6 +604,23 @@ test('a zip refresh that fails leaves the previous distributable untouched', asy
   clean(parent)
 })
 
+test('the refresh picks a zip writer, not a tar-only one, off Windows', async () => {
+  // Regression: this used to hardcode `tar.exe`, so on any host without it the
+  // PowerShell fallback also failed and the refresh never happened — which is
+  // why the Linux CI jobs failed while the Windows ones passed. On Unix the
+  // archiver has to be `zip`: macOS `tar` cannot write a zip and GNU tar needs
+  // 1.35+, so a single tool cannot cover every host.
+  const { dir, parent, zipPath } = project({ version: '0.2.0-rc.2', packaged: '0.2.0-rc.2', zip: true })
+  const logFile = join(dir, 'sync.log')
+  const refreshed = await refreshZip({ outputRoot: join(dir, 'dist'), folder: 'DSH Desktop Test', zipPath, logFile, timeoutMs: 60_000 })
+  assert.equal(refreshed.ok, true, refreshed.error ?? '')
+  const log = readFileSync(logFile, 'utf8')
+  const archiver = process.platform === 'win32' ? 'tar.exe' : 'zip'
+  assert.match(log, new RegExp(`\\$ ${archiver.replace('.', '\\.')} `, 'u'), `the ${archiver} tool is the one that wrote the archive`)
+  assert.match(log, /refreshed DSH-Desktop-绿色版\.zip/u, 'the refresh is logged as a success')
+  clean(parent)
+})
+
 test('a missing project is reported, not treated as an error', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-nodesktop-'))
   const result = await syncDesktop({ projectDir: root, mode: 'package', harnessVersion: '0.2.0-rc.2', logFile: join(root, 'sync.log') })
