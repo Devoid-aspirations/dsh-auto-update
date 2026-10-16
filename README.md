@@ -108,12 +108,38 @@ dsh plugin --profile web add "file:$PWD"
 
 装完**重启一次 harness** 让它进入 profile 树（之后本插件就不需要再手动装了 —— 它会自己升级 harness）。
 
-> `file:` 依赖是**拷贝**：改了插件代码后要重新装一次才会生效（pnpm 不会因为源码变了就重读目录）。清掉旧副本再装即可：
-> ```powershell
-> Remove-Item "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-auto-update" -Recurse -Force
-> dsh plugin --profile web add "file:$PWD"
-> ```
->
+### `file:` 装的是副本 —— 改完源码必须重装
+
+这是本项目最容易踩、且**在界面上看不出来**的一个坑：`file:` 依赖不是链接，`pnpm` 把仓库按 `package.json` 的 `files` 字段**拷一份**进 profile，之后两边再无关系。实测这份副本与仓库没有 junction、也没有硬链接（`fsutil hardlink list` 列出的是副本自己那个路径，链接数 1），而且它的时间戳停在当时拷贝的时刻、不跟随仓库。
+
+| | 仓库（`D:\其他\deepseekharness\programone\dsh-auto-update`） | profile 里那份副本（各自独立） |
+| --- | --- | --- |
+| `lib/`、`cordis.patch.yml`、`package.json`、`README.md` | ✅ | ✅ 拷贝 |
+| `test/`、`scripts/`、`.github/` | ✅ | ❌ 被 `files` 字段滤掉 |
+
+所以：**在仓库里改了 `lib/*.js`，运行中的插件一点变化都没有**，而它也不会报错 —— 你会以为改动没效果，其实是根本没跑你的代码。装进去的 `lib/` 是**某一刻的快照**，改一个字节的 js 不会让 `pnpm` 重读目录；发布时把 `package.json` 的 `version` 也提上去（并且仍然照下面两步重装），才是不会猜错的做法。
+
+重装的两步都不能省，顺序也不能反 —— **先删旧副本，再 add**（只 add 可能被当成「已经装过」而跳过拷贝）。两条都在**仓库根目录**执行，`$PWD` 才是仓库路径：
+
+```powershell
+Remove-Item "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-auto-update" -Recurse -Force
+dsh plugin --profile web add "file:$PWD"
+```
+
+然后**重启 harness**。副本变了还不足以生效：`file:` 拷贝是 `import` 进来的模块，热重载不会重读模块图，只有重启才会加载新副本（插件自己处理过的「热重入」说的是同一个进程里被重新 apply 两次时把上一个实例摘干净，不是让新代码生效）。
+
+改完想确认生效了，看两处：
+
+- 启动横幅（写在 `$DSH_HOME/auto-update/update.log` 里，格式见 `lib/index.js:909`）里的版本号，必须等于仓库当前 `package.json` 的 `version`：
+  ```
+  ── boot 8388-…: plugin 0.1.5, harness 0.2.0-rc.2, pid 8388, port 3080, supervisor none, restart respawn
+  ```
+  这个版本号是用 `ownVersion()` 从**副本自己的** `package.json` 读的（`lib/index.js:69-76`）—— 它显示旧版本号，就说明跑的还是旧副本。
+- 逐字节比对（相同则副本就是当前代码）：
+  ```powershell
+  (Get-FileHash .\lib\index.js).Hash -eq (Get-FileHash "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-auto-update\lib\index.js").Hash
+  ```
+
 > 如果 `dsh` 走的是 PowerShell 包装脚本，而本机执行策略禁止脚本（`dsh.ps1 cannot be loaded because running scripts is disabled`），直接跑 CLI 本体即可，效果完全一样：
 > ```powershell
 > node "$env:APPDATA\npm\node_modules\@deepseek-ai\dsh\lib\bin.js" plugin --profile web add "file:$PWD"
@@ -301,6 +327,13 @@ cd dsh-auto-update
 npm test          # = node test/run.mjs
 ```
 
+**测试只能在仓库里跑，而且测的必须是你刚改的那份源码。** 两件事容易混：
+
+- profile 里那份副本**没有 `test/` 目录**（被 `package.json` 的 `files` 字段滤掉了），所以「从安装目录跑测试」这条路径根本不存在，任何在 `~\.dsh\profiles\web\node_modules\dsh-auto-update` 里做的验证都无从谈起。
+- 反过来，`npm test` 只说明**仓库里的代码**是绿的，**不代表运行中的插件已经是这份代码** —— 测试通过和插件生效之间还差「删旧副本 → 重新 add → 重启 harness」这三步（见上面「`file:` 装的是副本」）。常见的一种自欺是：改完代码跑测试全绿，就以为升级逻辑已经改了，实际跑的还是上一份副本。
+
+所以涉及行为改动的流程是：**仓库里改 → `npm test` 全绿 → 重装副本 → 重启 → 在启动横幅和状态接口上确认新代码在跑**。
+
 - `version / check` —— 版本序、频道解析、发布年龄、冷却、不可达 registry 等判断分支
 - `compat` —— 兼容性闸门：目标版本移除了客户端插件硬依赖的包时如何拦截/降级
 - `desktop` —— 桌面端同步：识别项目、只改一行版本、产物版本验收（含「退出码 0 但打的是旧包」）、zip 完整性/新旧、**产物与项目逐文件比对（asar 与未打包两种形状、两个方向）**、同尺寸改动的 hash 捕获、刷新 zip 的原子性、并发打包锁、程序在跑时的跳过、`zipName` 路径穿越、asar 里读 manifest
@@ -330,6 +363,95 @@ zip 缺 EOCD/被截断 → 不完整、zip 比产物旧 → 重新打包、`refr
 >
 > 注 2：`plugin.test.mjs` 里那条「工具注册成功」的用例需要 `@deepseek-ai/dsh-tools` 可解析。本仓库用一个目录联接（junction）指向 profile 共享的该包：
 > `node_modules/@deepseek-ai/dsh-tools -> ~/.dsh/profiles/node_modules/@deepseek-ai/dsh-tools`。没有这个联接时该用例会跳过（不算失败），其余用例不受影响。
+
+## Releases
+
+一次发布 = **一次提交 + 一个 tag + 一份 GitHub Release**。三件事里最容易做错的是「提交了但没重装副本」，因为那时仓库里的版本号和真正在跑的代码已经不是一回事了 —— 这一节把「什么算发出去」写死，再给一条命令替你把关。
+
+### 版本号怎么走
+
+`package.json` 的 `version` 是**唯一**的版本事实来源，tag、Release、启动横幅里的 `plugin 0.1.5`、状态接口的 `pluginVersion` 全部从它读出来（`lib/index.js:69-76` 的 `ownVersion()` 读的是**副本自己的** manifest）。规则只有三条：
+
+| 改动 | 版本 | 例 |
+| --- | --- | --- |
+| 改行为、修 bug | 末位 +1 | `0.1.5 → 0.1.6` |
+| 加功能、加配置项，旧的用法仍然成立 | 中位 +1，末位置 0 | `0.1.5 → 0.2.0` |
+| 改配置语义、改状态文件形状、改助手协议（`lib/protocol.js` 的路径/schema/token） | 首位 +1 | `0.1.5 → 1.0.0` |
+
+几条硬规定：
+
+- **只用 `x.y.z`**，不带 `-rc.1` 之类后缀。`0.2.0-rc.2` 是 **harness** 的版本线，插件跟着它写同样是预发布号只会让「谁是预发布」变得说不清；`scripts/release-check.mjs` 会拒绝非 `x.y.z`。
+- **一次发布一次版本号 + 一个 commit**。两次发版之间如果没动 `version`，两个不同的副本在界面上长得一模一样，出问题时无法指认是哪一个 —— 这是这个项目里最贵的排错成本。
+- **版本号必须跟着提交走**。提交信息用发出这个版本时的既有格式：`[dsh-auto-update 0.1.5] <一句话>`（`git log` 里 `57af5f8` 就是这个形状），`fix:` / `test:` / `docs:` 这些前缀留给没发版的改动。
+- tag 用 `v` 前缀：`v0.1.5`。**一个版本只打一次 tag**；tag 推错了就发下一个 patch，删除远程 tag 会让已经拉到它的人拿到一个「曾经存在过」的版本号。
+
+### 一次发布的清单
+
+**1. 改版本号并提交** —— 用 `[dsh-auto-update <版本>] …` 当提交信息：
+
+```powershell
+# 手工编辑 package.json 的 version（例如 0.1.5 → 0.1.6）
+git add -A
+git commit -m "[dsh-auto-update 0.1.6] <一句话说清这一版改了什么>"
+```
+
+**2. 重装副本** —— 让机器检查的那两处对齐（两条命令见上面「`file:` 装的是副本」）。必须先删旧副本再 `add`，两步都在仓库根目录执行。**只有这一步做完，`ownVersion()` 才会报新版本号**；跳过它，横幅和状态接口会一直显示旧版本，下一步的「副本」那条必然报失败。
+
+**3. 跑测试和联动预检** —— 测试和预检分开是为了让「测试挂了」和「版本没对齐」在屏幕上就是两条不同的消息：
+
+```powershell
+npm test                  # 9 个文件全绿（= node test/run.mjs）
+npm run release:check     # x.y.z / 工作区干净 / 副本 / 在跑的实例
+```
+
+预检读的是**磁盘状态**，所以顺序不能倒：它比较的「副本」是第 2 步刚装进去的那一份，「工作区干净」是第 1 步那个提交。此时它仍会报「在跑的实例」不匹配 —— 那是**正常的**，运行中的 harness 还加载着旧副本：
+
+```text
+FAIL  running plugin reports the same version
+        pluginVersion = 0.1.5, repo → 0.1.6: the running instance still has the old copy loaded — restart the harness
+```
+
+所以最后一个动作是**重启 harness**（会中断正在进行的会话，选个时机自己做）。重启后再跑一次 `npm run release:check`，四条应该全绿 —— 那才是「这个版本真的在跑」的证据。
+
+**4. 重启后确认** —— 启动横幅（`$DSH_HOME/auto-update/update.log`）和 `/auto-update/api/v1/status` 的 `pluginVersion` 都应是新版本，再跑 `npm run release:check` 应当四条全绿，然后才进第 5 步。
+
+**5. 打 tag、推、发 Release**：
+
+```powershell
+git tag -a v0.1.6 -m "dsh-auto-update 0.1.6"
+git push origin main
+git push origin v0.1.6
+```
+
+（`git push` 要能认证到 `origin`；本机没装 `gh`，所以 Release 在 GitHub 网页上按 tag 创建即可 —— 正文写「这一版改了什么 + 验证怎么做的」，并附上本次 `npm test` 的结论。`RELEASE-NOTES-<tag>.md` 就是为这一步准备的：仓库里留一份，页面正文直接粘贴。）
+
+`npm run release:check` 会明确分开「警告」和「失败」：**没装副本**只是警告（这台机器上本来就没装）；**装了副本但版本对不上**是失败，因为那正是「以为发了、其实没跑」的状态；harness 没在 3080 上应答是跳过（发版机上它可能根本没开）。`--json` 给脚本消费，`--profile` / `--port` 换目标：
+
+```powershell
+node scripts/release-check.mjs --profile web --port 3080 --json
+```
+
+### 发出去的是什么
+
+| 渠道 | 现状 | 说明 |
+| --- | --- | --- |
+| GitHub Release（tag `v<x.y.z>`） | ✅ 唯一的发布渠道 | Release 正文写「这一版改了什么 + 验证怎么做的」，并附一行对应的 `npm test` 输出结论；产物就是仓库本身，不额外上传归档 |
+| 装进 profile | `dsh plugin --profile web add "file:$PWD"` | 只认 `file:`，没有 npm 包 —— 用户拿到的字节和仓库逐字节相同（`files` 字段决定拷哪些） |
+| npm registry | ❌ 刻意不发 | 这个插件会**无人值守地替宿主做全局安装并重启宿主**。把它放到 npm 上，等于给任何一条 `npm install` 装上一段能改写全局环境、并在空闲时自己动手的代码。要用就必须单独设计（scope、`publishConfig`、撤销路径），先不作为发布渠道 |
+| `dsh-desktop` 分发件 | 由**插件在运行时**同步 | 桌面端的版本号跟着 harness 的版本走，不跟插件的版本走；它由 `desktop.mode` 在每次 harness 升级时自动刷新，插件发版不触发它（见上面「桌面端同步」） |
+
+### 发布记录
+
+**`CHANGELOG.md` 是发布契约的一部分**：每次发版追加一节 `## [x.y.z] — YYYY-MM-DD`，写清楚三件事 —— 用户看得见的行为变化、这一版的验证结论、以及任何**降级或回滚**所需的信息（配置键改名、状态文件形状变化、助手协议变化）。tag 指到的那个 commit 里的 `CHANGELOG.md` 必须已经包含该版本那一节。
+
+**`RELEASE-NOTES-<tag>.md` 是给 GitHub 页面的正文**：`CHANGELOG.md` 是长期记录（每次追加一节、不删），Release 正文是**这一版单独的说明**（用户点开 Release 页面只看得到这一份）。所以两份都要写，但内容分工不同：Release 正文面向「要不要装/要不要升」，把这一版的变化、验证做法、以及需要用户动手的地方写在最前面；`CHANGELOG.md` 面向「几个月后回查哪个版本干了什么」。仓库里留一份正文（`RELEASE-NOTES-v<x.y.z>.md`），粘贴时不必再组织一次语言。
+
+### 发出去之后发现不对怎么办
+
+- **只是文档/文案错**：`CHANGELOG.md` 里更正，不回收版本号；下一个 patch 版本带上修正。
+- **代码错、但装的人不多**：`git revert` 那个提交 → 按普通流程发下一个 patch。**不要**删 tag、也不要重推同名 tag。
+- **代码会让装了它的人卡住**（起不来、回滚不了）：在 `CHANGELOG.md` 顶部写一节「已知问题」并给出 `holdVersion` 逃逸方式（配置里锁一个能用的版本，见上面配置表），然后尽快发修复版。
+- 插件自己的更新走的是 harness 那套机制（频道 / `minReleaseAgeMinutes` / 冷却），所以**发版不会立刻推到所有人的机器上**；真要紧急停止扩散，靠的就是 `CHANGELOG.md` 的说明 + `holdVersion`。
 
 ## 已验证的事实（本机实测）
 

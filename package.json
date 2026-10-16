@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-update",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "DeepSeek Harness 自动更新插件：自动检测 @deepseek-ai/dsh 新版本，在空闲窗口无人值守完成全局安装、自重启与健康检查，失败自动回滚，并把打包的桌面端（dsh-desktop）一并同步。 · Unattended self-update for DeepSeek Harness, desktop wrapper included.",
   "type": "module",
   "main": "lib/index.js",
@@ -28,7 +28,8 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node test/run.mjs"
+    "test": "node test/run.mjs",
+    "release:check": "node scripts/release-check.mjs"
   },
   "engines": {
     "node": ">=20"
