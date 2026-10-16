@@ -616,7 +616,9 @@ test('the refresh picks a zip writer, not a tar-only one, off Windows', async ()
   assert.equal(refreshed.ok, true, refreshed.error ?? '')
   const log = readFileSync(logFile, 'utf8')
   const archiver = process.platform === 'win32' ? 'tar.exe' : 'zip'
-  assert.match(log, new RegExp(`\\$ ${archiver.replace('.', '\\.')} `, 'u'), `the ${archiver} tool is the one that wrote the archive`)
+  // The line records the resolved path (`/usr/bin/zip`), not the bare name, so
+  // the executable name is matched at the end of the invoked path.
+  assert.match(log, new RegExp(`^\\[.*\\] \\$ \\S*${archiver.replace('.', '\\.')} `, 'mu'), `the ${archiver} tool is the one that wrote the archive`)
   assert.match(log, /refreshed DSH-Desktop-绿色版\.zip/u, 'the refresh is logged as a success')
   clean(parent)
 })
