@@ -156,8 +156,14 @@ function buildStub(projectDir) {
     script,
     `import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { writeAsar } from ${JSON.stringify(ASAR_URL)}
-const root = dirname(new URL(import.meta.url).pathname.replace(/^\\//u, ''))
+// fileURLToPath, not new URL(...).pathname. On Windows pathname is '/D:/...'
+// (leading slash must go), on Linux it is '/home/runner/...' (leading slash is
+// the root and must stay). Stripping a slash unconditionally turned the Linux
+// path into the relative 'home/runner/...', so the stub could not find its own
+// package.json and every package-mode test failed there with exit code 1.
+const root = dirname(fileURLToPath(import.meta.url))
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 if (process.env.STUB_BUILD_FAIL === '1') { process.exit(3) }
 if (process.env.STUB_BUILD_SLEEP !== undefined) { await new Promise((resolve) => setTimeout(resolve, Number(process.env.STUB_BUILD_SLEEP))) }

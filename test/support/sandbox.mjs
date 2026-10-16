@@ -156,8 +156,12 @@ export function writeDesktopBuildStub(projectDir) {
     script,
     `import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { writeAsar } from ${JSON.stringify(ASAR_URL)}
-const root = dirname(new URL(import.meta.url).pathname.replace(/^\\//u, ''))
+// fileURLToPath, not new URL(...).pathname: on Linux the pathname's leading
+// slash is the filesystem root and must survive. Stripping it unconditionally
+// made this relative, so the stub failed to find its own package.json.
+const root = dirname(fileURLToPath(import.meta.url))
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const shipped = [{ path: 'package.json', content: JSON.stringify({ name: manifest.name, productName: manifest.productName, version: manifest.version }, null, 2) }]
 // The shell itself, byte for byte: the artifact check compares what was packaged
