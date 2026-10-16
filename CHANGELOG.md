@@ -12,6 +12,37 @@
 >
 > 还有一件事要写清楚：**本仓库目前没有任何 tag**（`git tag -l` 是空的），所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上。
 
+## [0.1.7] — 2026-10-16
+
+这一版**改了插件在运行时的行为**，也是 `0.1.5` 之后第一次改动 `lib/`。修的是一个安静但很吵的缺陷：一条早就结束的升级记录会被每 20 秒（每次 tick）重新「和解」一次，把同一条 `reconciled: … is superseded` 写进 `update.log` 并重写一次 `state.json` —— 一天约 4300 次。它不改变任何升级决策（该升还是升、该回滚还是回滚），代价是日志被灌满、真正的线索被埋掉，以及无谓的磁盘写入。
+
+发现经过：`0.1.6` 重启后跑发布预检时顺手看日志，发现 `update.log`（324 KB）里那条 `reconciled: 0.2.0-rc.2 is running — the earlier failed verdict for 0.2.0-rc.2 is superseded` 占了约 45%，成对出现、间隔 10–20 秒。触发它的是本机一份 **2026-10-06 就冻结的 `helper.json`**（`phase: "failed"`、`target: "0.2.0-rc.2"`、`restartMode: "exit-only"`），而 `0.2.0-rc.2` 正是当时在跑的版本 —— 即「验证窗口过期」这条既有判定被反复套用在同一份原始记录上。
+
+### 修复
+
+- **`reconcile()` 不再每条 tick 重新判定同一份记录**：判定改成锚定**历史**（`state.history` 里是否已有该记录 id），而不是上一 tick 的内存标记。`helper.json` 是被分离的助手进程在退出时写死的，此后永不改变 —— 它描述的永远是同一次已经结束的运行，所以「已经和解过」这个事实必须来自能跨重启存活的地方。
+- **不再在读路径上覆盖已定的结论**：`tick()` 里 `state.helper = readHelper() ?? state.helper` 与 `api.status` 里同样的一行都去掉了。它们把 `reconcile()` 刚写好的 `settled` / `supersededBy` 用原始记录盖回去，于是下一次 tick 又把它当新记录处理；面板轮询 `status` 正好发生在这个空档里。
+- **在跑的助手仍然照读**：只有记录**尚未**定论时（`state.helper?.settled !== true`）才从 `helper.json` 读回进度，所以进行中的升级照样能在面板上看到实时状态。
+- **跨重启保留已定论的那条记录**：状态初始化从 `previousState.helper` 取回，而不是置 `null`。记录本身不跨越它触发的那次重启，但插件对它做出的结论应该跨越 —— 否则每次开机都会把同一份冻结记录再和解一次。
+
+### 验证
+
+- **真实事故记录回放**：把本机那份真实的 `helper.json`（目标 `0.2.0-rc.2`）在一个报告相同版本号的合成 harness 下回放两次。修复前：两次启动分别写出 2 条、3 条 `is superseded`（每次开机各加一条）。修复后：1 条、1 条（在和解它的那次启动上写一次，下一次静默）。
+- **归因实验**：只去掉 `tick()` 那处重读、保留状态接口那处守卫，缺陷就独立复现 —— 证明线上刷屏的主因是 tick 也重读了文件，光靠状态接口的守卫不够。
+- **回归测试**（`test/plugin.test.mjs`，新增用例）：`the settled failure is announced once, not on every tick` 与 `the settled verdict survives the restart that follows it`（两个**独立进程**共用一个 `DSH_HOME`，即真实的重启场景）。两条用例都**在未修复的代码上失败、在修复后通过**（用 `git stash push -- lib/index.js` 反证过）。
+- 新增测试夹具 `test/support/reconcile-once.mjs`：把插件对着一个合成 harness 启动两次（可配 `DSH_AUTO_UPDATE_HARNESS_VERSION` 以回放真实目标版本），并支持在两次 tick 之间插一次 `status` 读，用来复现「面板轮询清掉结论」这条路径。
+- `npm test` → `9/9 test files passed`（Windows 实跑）。
+
+### 升级之后你会看到什么
+
+- 已经灌满的 `update.log` **不会被自动清理** —— 这一版只是不再往上加。要收窄就自己清空该文件，或等日志轮转。
+- 不需要改配置、不需要重装 harness：`lib/` 换掉并重启后即生效，`helper.json` 里那条旧记录会在下一次启动时被标记为已和解，且只写一次。
+
+### 降级 / 回滚
+
+- 退回 `0.1.6` 即回到「每 20 秒写一条日志」的行为，升级决策不受影响 —— 这个缺陷只产生噪音与写入，不产生错误的安装或回滚。
+- 状态文件形状、配置键、助手协议均未变化；`state.helper` 新增的 `settled` / `supersededBy` 字段在 `0.1.6` 就已经会被写入，只是留不住。
+
 ## [0.1.6] — 2026-10-16
 
 这一版**没有改动插件在运行时的行为**（`lib/` 一个字节没动）：它补的是「怎么发布」这件事本身 —— 发布流程、一份能被机器检查的一致性预检、以及更新记录。所以升级它不会改变升级 harness 的任何行为，风险只在文档与工具。
@@ -69,6 +100,7 @@
 - `npm test`：9 个文件全绿（`9/9 test files passed`），只依赖 `node:` 内置模块，没有第三方依赖、没有安装步骤。
 - 真机实测记录（2026-10-15，插件 `0.1.3` 与 `0.1.5`，harness `0.2.0-rc.2`）：见 `README.md` 的「已验证的事实（本机实测）」—— 组合树包含插件行、状态接口 `globalInstall=true`、桌面端巡检与真机打包（`electron-builder 26.15.3 --win dir` exit 0）、以及两个真机撞出来的坑（产物 `package.json` 带 UTF-8 BOM 被 `JSON.parse` 拒绝；`DSH Desktop.exe` 正在运行时打包被跳过）。**这一节本身没有重新跑过那条真机审计**，记录的是这次审计当时的结论，原样保留在 README 里。
 
-[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.1.6...HEAD
+[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/57af5f8...v0.1.6
 [0.1.5]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/57af5f8...57af5f8
