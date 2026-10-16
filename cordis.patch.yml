@@ -1,0 +1,11 @@
+# dsh bundle patch: inserts this plugin into a profile's layer stack.
+# Tune it from the profile's own cordis.patch.yml (or $DSH_HOME/cordis.patch.yml)
+# by targeting id `auto-update`, e.g.:
+#
+#   - id: auto-update
+#     config:
+#       channel: next
+#       applyPolicy: idle
+- insert:
+    - id: auto-update
+      name: 'dsh-auto-update'

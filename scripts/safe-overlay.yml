@@ -1,0 +1,13 @@
+# Verification overlay: boots the plugin with every mutating action switched
+# off, so a second harness instance can be started beside the live one without
+# it ever installing anything.
+#
+#   dsh web --port 3099 --patch ./scripts/safe-overlay.yml
+#
+# Applied AFTER the profile's own layers, so it wins.
+- id: auto-update
+  config:
+    autoApply: false
+    checkIntervalMinutes: 1440
+    startupCheckDelaySeconds: 10
+    profilePlugins: off
