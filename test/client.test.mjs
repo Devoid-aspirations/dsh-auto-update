@@ -234,7 +234,7 @@ test('the button renders a label when the sidebar is wide and an icon when it is
   const wide = component({ wide: true, t })
   assert.equal(wide.type, 'button')
   assert.equal(wide.props.type, 'button')
-  assert.equal(wide.props.className, 'dsh-auto-update-footer')
+  assert.equal(wide.props.className, 'dsh-auto-update-footer dsh-auto-update-footer-row')
   assert.equal(wide.props['aria-label'], '自动更新')
   assert.equal(wide.props.title, zh['action.hint'])
   assert.equal(wide.props.children[0].type, primitives.IconDownloadOutlineRegular, 'the glyph is a shared primitive icon')
@@ -270,9 +270,13 @@ test('clicking opens the panel in a tab, and a re-apply replaces the stylesheet'
       assert.equal(css.includes('.dsh-auto-update-footer'), true, 'the injected CSS carries the button rule')
       assert.equal(css.includes('--dsw-alias-interactive-bg-hover'), true, 'the hover fill comes from the theme')
       // The panel is a loopback-only page: it must open on its own, not replace
-      // the session view, and the placement rules must be present.
-      assert.equal(css.includes('order:4'), true, 'the button sits between the settings and remote-access rows')
-      assert.equal(css.includes('[data-dsh-part=entry]'), true, 'the other footer entries are ordered around it')
+      // the session view, and the placement rules must be present. A row of its
+      // own between the settings and remote-access rows only works by
+      // flattening the row parent, so that rule is the load-bearing one.
+      assert.equal(css.includes(':has(>[data-slot="sidebar.footer.action"]>.dsh-auto-update-footer-row){display:contents}'), true, 'the footer row is flattened so the button can be a column item')
+      assert.equal(css.includes('.dsh-auto-update-footer-row{order:4'), true, 'the button takes the row between the other entries and the settings control')
+      assert.equal(css.includes('[class*=settingsArea]{order:5}'), true, 'the settings control stays on the floor')
+      assert.equal(css.includes(':not(.dsh-auto-update-footer-row){order:3'), true, 'the other footer entries sit above it')
     })
   } finally {
     globalThis.window = previous
@@ -303,4 +307,110 @@ test('under the Desktop bridge the panel opens in the system browser', async () 
   } finally {
     globalThis.window = previous
   }
+})
+
+test('the rendered row measures itself against the settings icon and moves the siblings with it', async () => {
+  const { capture } = await applyOnce()
+  capture.injected[0].register()
+  const { component } = capture.registrations[0]
+  const { zh } = capture.dictionaries.get('auto-update')
+  const button = component({ wide: true, t: (key) => zh[key] })
+
+  // The settings control's glyph sits 3 px left of ours and the remote-access
+  // entry's glyph is centred in a wider box, so both need to travel. The entry's
+  // glyph lives inside its own button, which is where the margin belongs.
+  const rect = (left) => ({ left })
+  const icon = (left) => ({ getBoundingClientRect: () => rect(left), closest: () => null })
+  const style = () => ({ props: {}, setProperty(name, value) { this.props[name] = value } })
+  const settingsIcon = icon(15)
+  const remoteStyle = style()
+  const remoteIcon = { getBoundingClientRect: () => rect(24), closest: () => remoteButton }
+  const remoteButton = { style: remoteStyle }
+  const remote = { querySelector: () => remoteIcon, style: style() }
+  const anchor = { children: [null, remote], closest: () => foot }
+  const foot = { querySelector: () => settingsIcon }
+  const node = { parentElement: anchor, querySelector: () => icon(18), style: {} }
+  anchor.children[0] = node
+
+  const previousGetComputedStyle = globalThis.getComputedStyle
+  globalThis.getComputedStyle = () => ({ paddingLeft: '6px', marginLeft: '0px' })
+  const previousRaf = globalThis.requestAnimationFrame
+  globalThis.requestAnimationFrame = (run) => run()
+  try {
+    button.props.ref(node)
+  } finally {
+    globalThis.getComputedStyle = previousGetComputedStyle
+    globalThis.requestAnimationFrame = previousRaf
+  }
+
+  assert.equal(node.style.paddingLeft, '3px', 'our row trims its padding until the glyph reaches the settings edge')
+  assert.equal(remoteStyle.props['margin-left'], '-9px', 'the entry we do not own is pulled left by its margin')
+})
+
+test('a sibling that mounts after us is still pulled onto the edge', async () => {
+  const { capture } = await applyOnce()
+  capture.injected[0].register()
+  const { component } = capture.registrations[0]
+  const { zh } = capture.dictionaries.get('auto-update')
+  const button = component({ wide: true, t: (key) => zh[key] })
+
+  const rect = (left) => ({ left })
+  const icon = (left) => ({ getBoundingClientRect: () => rect(left), closest: () => null })
+  const style = () => ({ props: {}, setProperty(name, value) { this.props[name] = value } })
+
+  // Mount: our row is the only entry, nothing to move.
+  let notify
+  const anchor = { children: [], closest: () => foot }
+  const foot = { querySelector: () => icon(15) }
+  const node = { parentElement: anchor, querySelector: () => icon(18), style: {} }
+  anchor.children.push(node)
+
+  const previousMutationObserver = globalThis.MutationObserver
+  globalThis.MutationObserver = class {
+    constructor(callback) {
+      notify = callback
+    }
+    observe() {}
+  }
+  const previousRaf = globalThis.requestAnimationFrame
+  globalThis.requestAnimationFrame = (run) => run()
+  const previousGetComputedStyle = globalThis.getComputedStyle
+  globalThis.getComputedStyle = () => ({ paddingLeft: '6px', marginLeft: '0px' })
+  const lateStyle = style()
+  try {
+    button.props.ref(node)
+    // The remote-access entry registers from its own inject and lands a frame later.
+    const lateIcon = { getBoundingClientRect: () => rect(21), closest: () => lateButton }
+    const lateButton = { style: lateStyle }
+    anchor.children.push({ querySelector: () => lateIcon, style: style() })
+    assert.equal(typeof notify, 'function', 'the footer roster is observed')
+    notify()
+  } finally {
+    globalThis.MutationObserver = previousMutationObserver
+    globalThis.requestAnimationFrame = previousRaf
+    globalThis.getComputedStyle = previousGetComputedStyle
+  }
+
+  assert.equal(lateStyle.props['margin-left'], '-6px', 'the late entry is aligned once it appears')
+})
+
+test('a shell without that footer markup leaves the layout alone instead of throwing', async () => {
+  const { capture } = await applyOnce()
+  capture.injected[0].register()
+  const { component } = capture.registrations[0]
+  const { zh } = capture.dictionaries.get('auto-update')
+  const button = component({ wide: true, t: (key) => zh[key] })
+  const node = { parentElement: null, querySelector: () => icon(), style: {} }
+  const icon = () => {
+    throw new Error('no layout')
+  }
+
+  const previousRaf = globalThis.requestAnimationFrame
+  globalThis.requestAnimationFrame = (run) => run()
+  try {
+    button.props.ref(node)
+  } finally {
+    globalThis.requestAnimationFrame = previousRaf
+  }
+  assert.deepEqual(node.style, {}, 'nothing was written')
 })
