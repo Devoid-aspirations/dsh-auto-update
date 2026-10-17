@@ -114,7 +114,7 @@ dsh plugin --profile web add "file:$PWD"
 
 这是本项目最容易踩、且**在界面上看不出来**的一个坑：`file:` 依赖不是链接，`pnpm` 把仓库按 `package.json` 的 `files` 字段**拷一份**进 profile，之后两边再无关系。实测这份副本与仓库没有 junction、也没有硬链接（`fsutil hardlink list` 列出的是副本自己那个路径，链接数 1），而且它的时间戳停在当时拷贝的时刻、不跟随仓库。
 
-| | 仓库（`D:\其他\deepseekharness\programone\dsh-auto-update`） | profile 里那份副本（各自独立） |
+| | 仓库（`<checkout>`，即 `dsh plugin add "file:$PWD"` 里那个 `$PWD`） | profile 里那份副本（各自独立） |
 | --- | --- | --- |
 | `lib/`、`cordis.patch.yml`、`package.json`、`README.md` | ✅ | ✅ 拷贝 |
 | `test/`、`scripts/`、`.github/` | ✅ | ❌ 被 `files` 字段滤掉 |
@@ -475,8 +475,8 @@ node scripts/release-check.mjs --profile web --port 3080 --json
 | 启动时清点遗留 plan 文件 | ✅ `pruned 1 finished plan file(s)`（真机清掉了 10 月升级留下的那一份） |
 | 状态接口 `/auto-update/api/v1/status` | ✅ `running=installed=0.2.0-rc.2`、`channel=stable`、`restartMode=respawn`、`surfaces={"tool":true,"http":true}` |
 | 面板页 `/auto-update/` | ✅ HTTP 200 |
-| 全局安装判定 | ✅ `globalInstall=true`，`globalRoot=C:\Users\sheqi\AppData\Roaming\npm\node_modules` |
-| 找到 npm | ✅ `D:\其他\Node.js\npm.cmd`（`source: node-dir`，即 node.exe 同目录） |
+| 全局安装判定 | ✅ `globalInstall=true`，`globalRoot=C:\Users\<you>\AppData\Roaming\npm\node_modules` |
+| 找到 npm | ✅ `npm.cmd`（`source: node-dir`，即 node.exe 同目录） |
 | 强制检查结论 | ✅ `up-to-date — running the newest stable release (0.2.0-rc.2)` |
 | 桌面端巡检 | ✅ `{projectDir: …\dsh-desktop, projectVersion: 0.2.0-rc.2, packagedVersion: 0.2.0-rc.2, action: up-to-date}` |
 | 按需桌面端同步接口 | ✅ `POST /api/v1/desktop` → HTTP 200 `status=up-to-date` |

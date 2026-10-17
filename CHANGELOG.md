@@ -79,7 +79,7 @@
 
 现象是面板上「立即检查」永远给不出候选版本 —— 状态接口里只有 `{"ok": false, "error": "fetch failed", "decision": "registry-unreachable"}`，看着像网络断了，而同一台机器上 `Invoke-WebRequest`、`curl`、`node -e 'fetch(…)'` 全都 200。当时 `channel` 指向 `latest`（`0.2.0-rc.2`，正是已装版本），「检查成功但没有新版本」与「检查失败」在界面上一样，于是缺陷一直藏在「你已经是最新的」这句判断背后。
 
-根因是一次**跨实现的代理交接**：插件按代理环境变量构造 `undici` 的 `ProxyAgent`，再塞进 Node 内置 `fetch` 的 `dispatcher` 选项。这个环境里 `undici` 能解析到（`C:\Users\sheqi\.dsh\profiles\web\node_modules\undici`，8.10.0，`billion-context` / `dshmarket` / `@liustack/modlens` 的依赖），但它是**另一份实现**：它的 agent 与 Node 内置那份 `fetch` 的 handler 契约不同，请求在发出之前就被拒，抛 `UND_ERR_INVALID_ARG: invalid onRequestStart method`，上层只看见 `fetch failed`。同一份代码在仓库目录下能跑，因为那里解析不到 `undici`，走的是不带 dispatcher 的直连。
+根因是一次**跨实现的代理交接**：插件按代理环境变量构造 `undici` 的 `ProxyAgent`，再塞进 Node 内置 `fetch` 的 `dispatcher` 选项。这个环境里 `undici` 能解析到（`C:\Users\<you>\.dsh\profiles\web\node_modules\undici`，8.10.0，`billion-context` / `dshmarket` / `@liustack/modlens` 的依赖），但它是**另一份实现**：它的 agent 与 Node 内置那份 `fetch` 的 handler 契约不同，请求在发出之前就被拒，抛 `UND_ERR_INVALID_ARG: invalid onRequestStart method`，上层只看见 `fetch failed`。同一份代码在仓库目录下能跑，因为那里解析不到 `undici`，走的是不带 dispatcher 的直连。
 
 ### 修复
 
