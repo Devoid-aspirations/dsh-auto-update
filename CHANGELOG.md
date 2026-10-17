@@ -10,7 +10,38 @@
 
 > 这个文件是**补写**的：`0.1.5` 发出去的时候还没有「更新记录」这个环节，所以它那一节不是当时的发布说明，而是从提交历史（`57af5f8`）和 `README.md` 的实测记录里**追认**出的基线。
 >
-> 还有一件事要写清楚：**本仓库目前没有任何 tag**（`git tag -l` 是空的），所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上。
+> 还有一件事要写清楚：`0.1.5` **从未打过 tag**，所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退到那一版，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上（`v0.1.6` 与 `v0.1.7` 都已存在）。
+
+## [0.2.0] — 2026-10-17
+
+这一版**加了用户看得见的东西**，也是第一次改动插件在浏览器里的行为：侧边栏底部多了一个「自动更新」按钮，点它在**新标签页**打开面板（`/auto-update/`）。
+
+在此之前，面板只存在于一个 URL 上，而面板自己不会告诉任何人它在哪 —— 装了插件的人要用它，得先记住地址。按钮把「有一个面板」变成「看得到入口」。面板本身（当前版本、候选版本、判断理由、日志尾部、立即检查/立即更新/同步桌面端）一个字节没改，所有按钮仍然走同一套 HTTP API。
+
+### 新增
+
+- **浏览器半边 `lib/client.js`**：按宿主给插件包的模块表注册（`window.__ModuleLoader__.load({ id, factory })`），只 require 宿主已经提供的共享模块（`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-primitives`）。没有构建步骤、没有打包产物 —— 文件装进副本就被宿主取到。
+- **侧边栏底部按钮**（槽位 `sidebar.footer.action`）：宽栏显示图标 + 文字，折叠栏只剩图标；36 px 圆角、悬停填充来自主题 token，和宿主自己的底部徽标同一套尺寸。点击用新标签页打开面板，不替换当前会话页。
+- **双语文案**：`auto-update` 命名空间下中英两份字典，键集合一致。
+- **`package.json` 声明**：`exports["./client"]` 指向 bundle，`dsh.client = { platform: "web", inject: [...] }` —— 宿主扫描 `dsh.client` 找到浏览器半边，`platform` 是必填项，缺了或类型不对会在启动时直接报错。
+
+### 变更
+
+- `README.md` 的「观察与控制」一节补上入口说明，并写明按钮要在**重装副本 + 重启 harness** 之后才出现（浏览器半边的清单是宿主启动时扫的）。
+
+### 验证
+
+- **`test/client.test.mjs`（新增，5 个用例）把 bundle 真跑一遍**：假的 `window.__ModuleLoader__` + 只含四个 specifier 的模块表，`factory(require)` 走真实代码路径。断言：清单声明的路径在仓库里存在、`lib/` 在 `files` 里、loader id 等于包名、`require` 只碰模块表里的名字、`apply` 注册了字典与按钮、宽/折叠两种渲染、点击参数是 `('/auto-update/', '_blank', 'noopener,noreferrer')`、重复 `apply` 只留一份样式表。
+- `node test/run.mjs` → `10/10 test files passed`（本机 Windows，node v24）。
+
+### 升级之后你会看到什么
+
+- 侧边栏底部多出一个按钮。**没有按钮 = 副本没重装，或 harness 没重启**：浏览器半边的清单在宿主启动时扫描，`file:` 副本是 import 进来的模块，热重载不会重读。
+- 面板、状态接口、`auto_update` 工具、所有配置键、状态文件形状都没有变化。
+
+### 降级 / 回滚
+
+退回 `0.1.7` 只会让按钮消失：宿主不再看到 `dsh.client` 声明，其余行为与 `0.2.0` 完全相同。没有状态迁移，也没有配置迁移。
 
 ## [0.1.7] — 2026-10-16
 
@@ -100,7 +131,8 @@
 - `npm test`：9 个文件全绿（`9/9 test files passed`），只依赖 `node:` 内置模块，没有第三方依赖、没有安装步骤。
 - 真机实测记录（2026-10-15，插件 `0.1.3` 与 `0.1.5`，harness `0.2.0-rc.2`）：见 `README.md` 的「已验证的事实（本机实测）」—— 组合树包含插件行、状态接口 `globalInstall=true`、桌面端巡检与真机打包（`electron-builder 26.15.3 --win dir` exit 0）、以及两个真机撞出来的坑（产物 `package.json` 带 UTF-8 BOM 被 `JSON.parse` 拒绝；`DSH Desktop.exe` 正在运行时打包被跳过）。**这一节本身没有重新跑过那条真机审计**，记录的是这次审计当时的结论，原样保留在 README 里。
 
-[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.1.7...HEAD
+[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/57af5f8...v0.1.6
 [0.1.5]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/57af5f8...57af5f8
