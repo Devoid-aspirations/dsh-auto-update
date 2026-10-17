@@ -246,10 +246,10 @@ test('the button renders a label when the sidebar is wide and an icon when it is
   assert.equal(narrow.props.children[0].props.size, 18)
 })
 
-test('clicking opens the panel in a new tab, and a re-apply replaces the stylesheet', async () => {
+test('clicking opens the panel in a tab, and a re-apply replaces the stylesheet', async () => {
   const calls = []
   const previous = globalThis.window
-  globalThis.window = { open: (...args) => calls.push(args) }
+  globalThis.window = { location: { href: 'http://127.0.0.1:3080/' }, open: (...args) => calls.push(args) }
   try {
     await withDocument(async (document) => {
       for (let index = 0; index < 2; index += 1) {
@@ -263,13 +263,43 @@ test('clicking opens the panel in a new tab, and a re-apply replaces the stylesh
         assert.equal(document.tags[0].dataset.plugin, 'dsh-auto-update')
       }
       assert.deepEqual(calls, [
-        ['/auto-update/', '_blank', 'noopener,noreferrer'],
-        ['/auto-update/', '_blank', 'noopener,noreferrer'],
+        ['http://127.0.0.1:3080/auto-update/', '_blank', 'noopener,noreferrer'],
+        ['http://127.0.0.1:3080/auto-update/', '_blank', 'noopener,noreferrer'],
       ])
       const css = document.tags[0].textContent
       assert.equal(css.includes('.dsh-auto-update-footer'), true, 'the injected CSS carries the button rule')
       assert.equal(css.includes('--dsw-alias-interactive-bg-hover'), true, 'the hover fill comes from the theme')
+      // The panel is a loopback-only page: it must open on its own, not replace
+      // the session view, and the placement rules must be present.
+      assert.equal(css.includes('order:4'), true, 'the button sits between the settings and remote-access rows')
+      assert.equal(css.includes('[data-dsh-part=entry]'), true, 'the other footer entries are ordered around it')
     })
+  } finally {
+    globalThis.window = previous
+  }
+})
+
+test('under the Desktop bridge the panel opens in the system browser', async () => {
+  const opened = []
+  const externals = []
+  const previous = globalThis.window
+  // The preload bridge exposes `openExternal`; `window.open` is what the Desktop
+  // window-open handler would turn into an Electron child window instead.
+  globalThis.window = {
+    location: { href: 'http://127.0.0.1:3080/' },
+    open: (...args) => opened.push(args),
+    dshDesktop: { openExternal: (url) => externals.push(url) },
+  }
+  try {
+    await withDocument(async () => {
+      const { capture } = await applyOnce()
+      capture.injected[0].register()
+      const { component } = capture.registrations[0]
+      const { zh } = capture.dictionaries.get('auto-update')
+      component({ wide: true, t: (key) => zh[key] }).props.onClick()
+    })
+    assert.deepEqual(externals, ['http://127.0.0.1:3080/auto-update/'], 'the bridge gets the absolute loopback URL')
+    assert.deepEqual(opened, [], 'no Electron child window is opened')
   } finally {
     globalThis.window = previous
   }

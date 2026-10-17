@@ -2,7 +2,7 @@
 
 > 这一份就是 GitHub Release 页面（tag `v0.2.0`）的正文，仓库里留档一份，粘贴时不必再组织一次语言。
 
-**这一版加了用户看得见的东西**：侧边栏底部多了一个「自动更新」按钮，点它在**新标签页**打开面板（`/auto-update/`）。
+**这一版加了用户看得见的东西**：侧边栏底部多了一个「自动更新」按钮，在**设置**与**远程访问**之间独占一行，点它打开面板（`/auto-update/`）—— 桌面端交给**系统默认浏览器**，普通浏览器里是新标签页。
 
 在此之前，面板只存在于一个 URL 上，而面板自己不会告诉任何人它在哪 —— 装了插件的人要用它，得先记住地址。按钮把「有一个面板」变成「看得到入口」。面板本身一个字节没改：当前版本、候选版本、判断理由、推迟原因、历史记录、日志尾部，以及「立即检查」「立即更新」「同步桌面端」三个按钮都在原处，仍然走同一套 HTTP API。
 
@@ -19,7 +19,7 @@ dsh plugin --profile web add "file:$PWD"
 
 ## 你会看到什么变化
 
-- **侧边栏底部多出一个按钮**。宽栏时图标 + 「自动更新」文字，折叠栏时只剩图标；悬停有主题填充，点击打开新标签页，当前会话页不会被顶掉。
+- **侧边栏底部多出一个按钮**，位置在「设置」和「远程访问」之间、自占一行。宽栏时图标 + 「自动更新」文字，折叠栏时只剩图标；悬停有主题填充。点击后桌面端用**系统默认浏览器**打开面板，普通浏览器里是新标签页 —— 当前会话页不会被顶掉。
 - **没有按钮 = 副本没重装，或 harness 没重启**。这是唯一的“安装步骤”，没有需要你手改的配置。
 - 面板、状态接口、`auto_update` 工具、所有配置键、状态文件形状**都没有变化**。
 
@@ -30,11 +30,12 @@ dsh plugin --profile web add "file:$PWD"
 - 只 require 宿主已经提供的共享模块（`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-primitives`），所以**没有构建步骤**，也没有需要一起发布的打包产物 —— 文件装进副本就被宿主取到；
 - 通过 `package.json` 的 `exports["./client"]` 与 `dsh.client = { platform: "web", inject: [...] }` 被宿主的插件表发现，`platform` 是必填项；
 - 注册的是**槽位** `sidebar.footer.action`，不接管页面、不替换路由，因此和面板、状态接口互不干扰；
-- 样式只有四行 CSS，用主题 token（`--dsw-alias-label-primary`、`--dsw-alias-interactive-bg-hover`），亮色暗色都不需要单独适配；重复 `apply` 只保留一份样式表。
+- 打开方式看宿主：DSH Desktop 的 preload 桥接暴露 `window.dshDesktop.openExternal`，有它就交给系统默认浏览器（桌面端里的 `window.open` 会被窗口打开处理器接成 Electron 子窗口，而面板只对回环开放）；没有就用新标签页；
+- 样式只有几行 CSS，用主题 token（`--dsw-alias-label-primary`、`--dsw-alias-interactive-bg-hover`），亮色暗色都不需要单独适配；重复 `apply` 只保留一份样式表。排布靠 `order`：底部那一列的锚点都是 `display:contents`，`@linxin666/dsh-remote-web-ui` 占用了 1/3/4（其他贡献 / 设置 / 它自己的入口），本插件取 4、把它的入口挤到 5，所以自上而下是「设置 → 自动更新 → 远程访问」。
 
 ## 验证
 
-- **把 bundle 真跑一遍**（`test/client.test.mjs`，5 个用例）：假的 `window.__ModuleLoader__` 与只含四个 specifier 的模块表，`factory(require)` 走真实代码路径。断言覆盖：清单声明的路径在仓库里存在、`lib/` 在 `files` 里、loader id 等于包名、`require` 只碰模块表里的名字、`apply` 注册了字典与按钮、宽/折叠两种渲染、点击参数是 `('/auto-update/', '_blank', 'noopener,noreferrer')`、重复 `apply` 只留一份样式表。
+- **把 bundle 真跑一遍**（`test/client.test.mjs`，6 个用例）：假的 `window.__ModuleLoader__` 与只含四个 specifier 的模块表，`factory(require)` 走真实代码路径。断言覆盖：清单声明的路径在仓库里存在、`lib/` 在 `files` 里、loader id 等于包名、`require` 只碰模块表里的名字、`apply` 注册了字典与按钮、宽/折叠两种渲染、浏览器里点击参数是 `('http://127.0.0.1:3080/auto-update/', '_blank', 'noopener,noreferrer')`、有 `dshDesktop.openExternal` 时改走它且不调 `window.open`、样式表里带排布规则、重复 `apply` 只留一份样式表。
 - `npm test` → `10/10 test files passed`（本机 Windows，node v24）。
 
 ## 降级 / 回滚

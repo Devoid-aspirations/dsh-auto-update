@@ -14,29 +14,31 @@
 
 ## [0.2.0] — 2026-10-17
 
-这一版**加了用户看得见的东西**，也是第一次改动插件在浏览器里的行为：侧边栏底部多了一个「自动更新」按钮，点它在**新标签页**打开面板（`/auto-update/`）。
+这一版**加了用户看得见的东西**，也是第一次改动插件在浏览器里的行为：侧边栏底部多了一个「自动更新」按钮，在**设置**与**远程访问**之间独占一行，点它打开面板（`/auto-update/`）—— 桌面端交给**系统默认浏览器**，普通浏览器里是新标签页。
 
 在此之前，面板只存在于一个 URL 上，而面板自己不会告诉任何人它在哪 —— 装了插件的人要用它，得先记住地址。按钮把「有一个面板」变成「看得到入口」。面板本身（当前版本、候选版本、判断理由、日志尾部、立即检查/立即更新/同步桌面端）一个字节没改，所有按钮仍然走同一套 HTTP API。
 
 ### 新增
 
 - **浏览器半边 `lib/client.js`**：按宿主给插件包的模块表注册（`window.__ModuleLoader__.load({ id, factory })`），只 require 宿主已经提供的共享模块（`react/jsx-runtime`、`@deepseek-ai/dsh-client-ui-primitives`）。没有构建步骤、没有打包产物 —— 文件装进副本就被宿主取到。
-- **侧边栏底部按钮**（槽位 `sidebar.footer.action`）：宽栏显示图标 + 文字，折叠栏只剩图标；36 px 圆角、悬停填充来自主题 token，和宿主自己的底部徽标同一套尺寸。点击用新标签页打开面板，不替换当前会话页。
+- **侧边栏底部按钮**（槽位 `sidebar.footer.action`）：宽栏显示图标 + 文字，折叠栏只剩图标；36 px 圆角、悬停填充来自主题 token，和宿主自己的底部徽标同一套尺寸。它在**设置**与**远程访问**之间自占一行，点击不会替换当前会话页。
+- **桌面端走系统浏览器**：DSH Desktop 的 preload 桥接暴露 `window.dshDesktop.openExternal`，有它就交给系统默认浏览器 —— 桌面端里的 `window.open` 会被窗口打开处理器接住、变成 Electron 子窗口，而面板是只有回环能访问的页面，不该被关在应用窗口里。普通浏览器里仍然用新标签页。
 - **双语文案**：`auto-update` 命名空间下中英两份字典，键集合一致。
 - **`package.json` 声明**：`exports["./client"]` 指向 bundle，`dsh.client = { platform: "web", inject: [...] }` —— 宿主扫描 `dsh.client` 找到浏览器半边，`platform` 是必填项，缺了或类型不对会在启动时直接报错。
 
 ### 变更
 
 - `README.md` 的「观察与控制」一节补上入口说明，并写明按钮要在**重装副本 + 重启 harness** 之后才出现（浏览器半边的清单是宿主启动时扫的）。
+- 底部那一列由共享槽位排布：`footerActions` 与槽位锚点都是 `display:contents`，所以每个贡献都是 `footArea` 的直接子项，**只有 `order` 能决定顺序**。`@linxin666/dsh-remote-web-ui` 占用了 1/3/4（其他贡献 / 设置 / 它自己的入口），本插件取 4、把它的入口挤到 5，于是自上而下是「设置 → 自动更新 → 远程访问」。
 
 ### 验证
 
-- **`test/client.test.mjs`（新增，5 个用例）把 bundle 真跑一遍**：假的 `window.__ModuleLoader__` + 只含四个 specifier 的模块表，`factory(require)` 走真实代码路径。断言：清单声明的路径在仓库里存在、`lib/` 在 `files` 里、loader id 等于包名、`require` 只碰模块表里的名字、`apply` 注册了字典与按钮、宽/折叠两种渲染、点击参数是 `('/auto-update/', '_blank', 'noopener,noreferrer')`、重复 `apply` 只留一份样式表。
+- **`test/client.test.mjs`（新增，6 个用例）把 bundle 真跑一遍**：假的 `window.__ModuleLoader__` + 只含四个 specifier 的模块表，`factory(require)` 走真实代码路径。断言：清单声明的路径在仓库里存在、`lib/` 在 `files` 里、loader id 等于包名、`require` 只碰模块表里的名字、`apply` 注册了字典与按钮、宽/折叠两种渲染、浏览器里点击参数是 `('http://127.0.0.1:3080/auto-update/', '_blank', 'noopener,noreferrer')`、有 `dshDesktop.openExternal` 时改走它且不调 `window.open`、样式表里有排布规则、重复 `apply` 只留一份样式表。
 - `node test/run.mjs` → `10/10 test files passed`（本机 Windows，node v24）。
 
 ### 升级之后你会看到什么
 
-- 侧边栏底部多出一个按钮。**没有按钮 = 副本没重装，或 harness 没重启**：浏览器半边的清单在宿主启动时扫描，`file:` 副本是 import 进来的模块，热重载不会重读。
+- 侧边栏底部多出一个按钮，位置在「设置」与「远程访问」之间。**没有按钮 = 副本没重装，或 harness 没重启**：浏览器半边的清单在宿主启动时扫描，`file:` 副本是 import 进来的模块，热重载不会重读。
 - 面板、状态接口、`auto_update` 工具、所有配置键、状态文件形状都没有变化。
 
 ### 降级 / 回滚
