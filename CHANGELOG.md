@@ -12,6 +12,30 @@
 >
 > 还有一件事要写清楚：`0.1.5` **从未打过 tag**，所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退到那一版，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上（`v0.1.6` 与 `v0.1.7` 都已存在）。
 
+## [0.2.1] — 2026-10-17
+
+这一版修的是**检测本身**：在能解析到 `undici` 的机器上，更新检查从来没连上过 registry。
+
+现象是面板上「立即检查」永远给不出候选版本 —— 状态接口里只有 `{"ok": false, "error": "fetch failed", "decision": "registry-unreachable"}`，看着像网络断了，而同一台机器上 `Invoke-WebRequest`、`curl`、`node -e 'fetch(…)'` 全都 200。当时 `channel` 指向 `latest`（`0.2.0-rc.2`，正是已装版本），「检查成功但没有新版本」与「检查失败」在界面上一样，于是缺陷一直藏在「你已经是最新的」这句判断背后。
+
+根因是一次**跨实现的代理交接**：插件按代理环境变量构造 `undici` 的 `ProxyAgent`，再塞进 Node 内置 `fetch` 的 `dispatcher` 选项。这个环境里 `undici` 能解析到（`C:\Users\sheqi\.dsh\profiles\web\node_modules\undici`，8.10.0，`billion-context` / `dshmarket` / `@liustack/modlens` 的依赖），但它是**另一份实现**：它的 agent 与 Node 内置那份 `fetch` 的 handler 契约不同，请求在发出之前就被拒，抛 `UND_ERR_INVALID_ARG: invalid onRequestStart method`，上层只看见 `fetch failed`。同一份代码在仓库目录下能跑，因为那里解析不到 `undici`，走的是不带 dispatcher 的直连。
+
+### 修复
+
+- **借用 agent 的同时借用它的 `fetch`**：`proxyDispatcher()` 现在把 `undici.fetch` 一起带回来，请求由**同一份实现**的客户端与 agent 完成，handler 契约自然一致。
+- **失败后退一步直连**：代理那条路仍然失败时（agent 不兼容、代理宕了、隧道抖了），再用不带 dispatcher 的普通请求试一次；两次都失败才报错，信息里带上两条原因。这样「有代理但直连也能通」的机器不会再被判成 registry 不可达 —— 这台机器正是如此。
+- **`fetchTaggedVersion` 同样处理**：它原来也只在代理失败时静默返回 `null`，等于把 `channel: next` 这类 dist-tag 查询一起废掉；现在同样先代理后直连。
+
+### 验证
+
+- **在副本目录里复现并验证修复**（那里才有 `undici`）：修复前 `fetchPackument('@deepseek-ai/dsh')` 抛 `UND_ERR_INVALID_ARG: invalid onRequestStart method`；修复后读到 `{"latest":"0.2.0-rc.2","alpha":"0.2.1-alpha.5","next":"0.2.1-rc.2"}`，`fetchTaggedVersion('next')` → `0.2.1-rc.2`。
+- **`test/registry.test.mjs`（新增，6 个用例）**：请求形状（URL 编码、`accept`、`user-agent`、不带 dispatcher）、404 的报错文案带上状态与 URL、非对象 packument 报错而不是静默 `null`、dist-tag 查询的正常/未发布/抛错三条路径、以及 fetch 失败必须冒泡给调用方（不允许再被吞成「没有新版本」）。
+- `node test/run.mjs` → `11/11 test files passed`（本机 Windows，node v24）。
+
+### 降级 / 回滚
+
+退回 `0.2.0` 会回到「能解析 `undici` 的机器上检测恒失败」的行为：不影响安装与回滚链路，只是查不到新版本。状态文件形状、配置键、助手协议都没有变化。
+
 ## [0.2.0] — 2026-10-17
 
 这一版**加了用户看得见的东西**，也是第一次改动插件在浏览器里的行为：侧边栏底部多了一个「自动更新」按钮，在**设置**与**远程访问**之间独占一行，点它打开面板（`/auto-update/`）—— 桌面端交给**系统默认浏览器**，普通浏览器里是新标签页。
@@ -133,7 +157,8 @@
 - `npm test`：9 个文件全绿（`9/9 test files passed`），只依赖 `node:` 内置模块，没有第三方依赖、没有安装步骤。
 - 真机实测记录（2026-10-15，插件 `0.1.3` 与 `0.1.5`，harness `0.2.0-rc.2`）：见 `README.md` 的「已验证的事实（本机实测）」—— 组合树包含插件行、状态接口 `globalInstall=true`、桌面端巡检与真机打包（`electron-builder 26.15.3 --win dir` exit 0）、以及两个真机撞出来的坑（产物 `package.json` 带 UTF-8 BOM 被 `JSON.parse` 拒绝；`DSH Desktop.exe` 正在运行时打包被跳过）。**这一节本身没有重新跑过那条真机审计**，记录的是这次审计当时的结论，原样保留在 README 里。
 
-[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.0...HEAD
+[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/57af5f8...v0.1.6
