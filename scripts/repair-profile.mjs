@@ -4,8 +4,9 @@
  * Written as a Node script on purpose: the paths involved contain non-ASCII
  * characters, and every layer that reads them with the wrong encoding (a
  * PowerShell script read as ANSI, or `Start-Process` argument marshalling)
- * turns `其他` into `鍏朵粬` — which is exactly how the installed spec got
- * mangled once already. Node reads and writes UTF-8 by construction.
+ * turns a Chinese directory name into mojibake — which is exactly how the
+ * installed spec got mangled once already. Node reads and writes UTF-8 by
+ * construction.
  *
  * Usage: node scripts/repair-profile.mjs
  */
