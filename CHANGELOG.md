@@ -12,6 +12,44 @@
 >
 > 还有一件事要写清楚：`0.1.5` **从未打过 tag**，所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退到那一版，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上（`v0.1.6` 与 `v0.1.7` 都已存在）。
 
+## [0.3.1] — 2026-10-18
+
+这一版只改**面板这一张页面**，不动检测、安装、重启任何一条链路。改法是拿[Vercel Web Interface Guidelines](https://github.com/vercel-labs/web-interface-guidelines)（`command.md`，8055 字节）把 `lib/dashboard.js` 逐条过了一遍，把 P0/P1 项全部处理。
+
+页面仍然是零构建的单文件 HTML，颜色和排版基本没变（深色 `#0d1117`）；变的是**能不能用键盘操作、读屏能不能听到结果、窄窗口会不会溢出、看日志会不会被弹走**。
+
+### 修复
+
+- **日志每 10 秒把滚动位置清零**：轮询直接替换 `textContent`，正在往上翻看某一行的人会被弹回底部。现在先记滚动位置，除非读者本来就在底部，否则原地不动。
+- **请求悬挂时按钮永久禁用**：`fetch` 没有超时，一个卡住的请求会让按钮一直停在 disabled。现在 POST 20 秒、日志 15 秒超时，失败后按钮恢复原样。
+- **页面隐藏时仍在轮询**：切走标签页还每 10 秒打一次日志接口。现在 `document.hidden` 时跳过，切回来立刻补一次。
+- **错误只报问题、不给下一步**：`检查失败：fetch failed` 之类改成带上「可稍后重试，或看下方日志」「原因见下方日志」。
+
+### 变更
+
+- **频道选择器有了真正的 `<label for>`**，说明文字用 `aria-describedby` 挂上；`<option>` 的频道名标 `translate="no"`，避免浏览器自动翻译把值改掉。
+- **异步结果可被宣布**：toast 变成 `role="status" aria-live="polite" aria-atomic="true"`；日志区是 `role="log"` + `tabindex="0"`（可聚焦、可键盘滚动），但 `aria-live="off"` —— 每 10 秒念一遍日志尾没有意义。
+- **时间戳变成 `<time datetime="…">`**：服务端按宿主时区渲染（无 JS 也能读），浏览器加载后按**读者本地时区**重写。以前在别的时区看，时间是宿主的时间。
+- **数字走 `Intl`**：zip 字节从 `162578757B` 变成 `155 MB`，候选版本的年龄从 `12346` 变成 `12,346 分钟前`；数字列加 `font-variant-numeric: tabular-nums`。
+- **布局不再被长内容撑破**：5 列表格套 `.scroll-x{overflow-x:auto}` 容器；`.row > *{min-width:0}` 让说明文字可以收缩；`pre` 加 `overflow-wrap:anywhere`。
+- **键盘可见性**：`:focus-visible` 给 2px `#58a6ff` 焦点环（原先只有浏览器默认环）；加「跳到主要内容」跳过链接；`h1`/`h2` 用 `text-wrap: balance`；按钮/下拉加 `touch-action: manipulation`。
+- **显式进行态**：检查/更新/同步三个按钮在请求期间显示「检查中…」「启动中…」「同步中…」，失败时恢复原标签。
+- **`<meta name="theme-color" content="#0d1117">`**：桌面端窗口标题栏与页面背景一致。
+
+### 验证
+
+- `node test/run.mjs` → **12/12 test files passed**。
+- 新增 `test/dashboard.test.mjs`（9 个用例），盯的是以前完全没人盯的东西：**转义**（把 `<img onerror>`、`</script>`、`<svg onload>` 塞进 reason/candidate/history 断言全部被转成实体）、标签与 `aria` 契约、`<time>` 与服务端时区回退、`Intl` 格式化、空历史文案、兼容性闸门/推迟/助手裁决/桌面端漂移四个条件块、标识符的 `translate="no"`。
+- 审计范围的 P0/P1 共 10 条全部落地；P2 里顺带做了 `tabular-nums`、`translate="no"`、跳过链接、toast 预留高度（用 `min-height` 避免出现/消失时抖动）。
+
+### 升级之后你会看到什么
+
+页面观感几乎不变。变化在细节：键盘 Tab 能看见焦点、窄窗口里表格自己横向滚动而不是整页溢出、日志往上翻时不会再被拉回底部、时间按你机器的时区显示、`155 MB` 比 `162578757B` 好读。
+
+### 降级 / 回滚
+
+只动了 `lib/dashboard.js` 与新增的一个测试文件，没有状态迁移、没有配置键、没有协议变更。退回 `0.3.0` 只会回到旧的页面。
+
 ## [0.3.0] — 2026-10-18
 
 这一版把**频道**从「只有配置文件能决定」变成「面板上自己选」，并且让这个选择记住。
@@ -218,7 +256,8 @@
 - `npm test`：9 个文件全绿（`9/9 test files passed`），只依赖 `node:` 内置模块，没有第三方依赖、没有安装步骤。
 - 真机实测记录（2026-10-15，插件 `0.1.3` 与 `0.1.5`，harness `0.2.0-rc.2`）：见 `README.md` 的「已验证的事实（本机实测）」—— 组合树包含插件行、状态接口 `globalInstall=true`、桌面端巡检与真机打包（`electron-builder 26.15.3 --win dir` exit 0）、以及两个真机撞出来的坑（产物 `package.json` 带 UTF-8 BOM 被 `JSON.parse` 拒绝；`DSH Desktop.exe` 正在运行时打包被跳过）。**这一节本身没有重新跑过那条真机审计**，记录的是这次审计当时的结论，原样保留在 README 里。
 
-[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.3.0...HEAD
+[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.0...v0.2.1
