@@ -393,6 +393,79 @@ test('a failure to initialize degrades to unavailable instead of failing the boo
   }
 })
 
+test('the channel can be switched from the panel, and the choice outlives the restart', async () => {
+  const dshHome = mkdtempSync(join(tmpdir(), 'dsh-home-'))
+  mkdirSync(dshHome, { recursive: true })
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = dshHome
+  try {
+    const { apply } = await import('../lib/index.js')
+    const stateFile = join(dshHome, 'auto-update', 'state.json')
+    const readState = () => JSON.parse(readFileSync(stateFile, 'utf8'))
+
+    /**
+     * POST a JSON body at the plugin's own route, exactly as the panel does.
+     * @param {object} route - the registered prefix route.
+     * @param {string} path - the endpoint path.
+     * @param {object} payload - the request body.
+     * @returns {Promise<{status: number, body: object}>} the answer.
+     */
+    const post = async (route, path, payload) => {
+      const res = { status: 0, body: '', writeHead(status) { this.status = status }, end(body) { this.body = body } }
+      await route.handler(
+        {
+          method: 'POST',
+          url: path,
+          headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080', 'content-type': 'application/json' },
+          socket: { remoteAddress: '127.0.0.1' },
+          async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(payload)) },
+        },
+        res,
+      )
+      return { status: res.status, body: res.body === '' ? {} : JSON.parse(res.body) }
+    }
+
+    // `next` is what the user asks for; `latest` is the dist-tag `stable` reads,
+    // so both spellings have to land on the same channel.
+    const { ctx, capture } = fakeContext()
+    apply(ctx, { autoApply: false, startupCheckDelaySeconds: 3600, checkIntervalMinutes: 60 })
+    const first = await post(capture.routes[0], '/auto-update/api/v1/channel', { channel: 'next' })
+    assert.equal(first.status, 200)
+    assert.deepEqual(first.body, { channel: 'next', changed: true })
+    assert.equal(readState().channel, 'next', 'the status document names the new channel')
+    assert.equal(readState().channelOverride, 'next', 'and remembers that a click chose it')
+    assert.equal(readState().configuredChannel, 'stable', 'the profile row is still the baseline')
+    assert.equal(readState().check, null, 'the old channel verdict is dropped, not kept as if it still applied')
+
+    const again = await post(capture.routes[0], '/auto-update/api/v1/channel', { channel: 'latest' })
+    assert.deepEqual(again.body, { channel: 'stable', changed: true }, '`latest` is accepted as the stable channel')
+
+    const bad = await post(capture.routes[0], '/auto-update/api/v1/channel', { channel: 'nightly' })
+    assert.equal(bad.status, 400, 'an unknown channel is refused')
+    assert.match(bad.body.error, /unknown channel/u)
+    assert.equal(readState().channel, 'stable', 'and changes nothing')
+
+    await post(capture.routes[0], '/auto-update/api/v1/channel', { channel: 'next' })
+
+    // The restart the click did not cause: the plugin must come back on `next`
+    // while the profile row still says `stable`.
+    apply(ctx, { autoApply: false, startupCheckDelaySeconds: 3600, checkIntervalMinutes: 60 })
+    assert.equal(readState().channel, 'next', 'the click survives the restart')
+    assert.equal(readState().channelOverride, 'next')
+
+    // An operator edit is a newer decision than an older click: it wins, and the
+    // override is retired so the row is the single source of truth again.
+    apply(ctx, { autoApply: false, startupCheckDelaySeconds: 3600, checkIntervalMinutes: 60, channel: 'alpha' })
+    const afterEdit = readState()
+    assert.equal(afterEdit.channel, 'alpha', 'the edited profile row wins over the panel click')
+    assert.equal(afterEdit.channelOverride, null, 'and the stale click is retired')
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    rmSync(dshHome, { recursive: true, force: true })
+  }
+})
+
 test('a re-apply retires the instance it replaces instead of stacking on it', async () => {
   const dshHome = mkdtempSync(join(tmpdir(), 'dsh-home-'))
   mkdirSync(dshHome, { recursive: true })

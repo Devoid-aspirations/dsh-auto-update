@@ -12,6 +12,37 @@
 >
 > 还有一件事要写清楚：`0.1.5` **从未打过 tag**，所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退到那一版，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上（`v0.1.6` 与 `v0.1.7` 都已存在）。
 
+## [0.3.0] — 2026-10-18
+
+这一版把**频道**从「只有配置文件能决定」变成「面板上自己选」，并且让这个选择记住。
+
+在此之前想从 `next` 换回 `latest`，唯一的路是改 profile 的 `cordis.patch.yml` 再等热重入 —— 一个「自动更新」插件的发布策略要开编辑器才能改，这是设计上的缺口，不是使用习惯问题。
+
+### 新增
+
+- **面板上的频道选择器**：`latest（只收正式版）/ next（含预发布）/ alpha（含内部版）`，切换即生效，约 20 秒内重新检查一次（下一次 tick 就是重新判定点）。
+- **选择会被记住**：写进状态文件的 `channelOverride`，重启后仍然生效，不必重新点。
+- **`latest` 作为 `stable` 的同义写法**：面板上写的是 `latest`（用户嘴里的名字），配置里也能直接写 `latest`；状态文档里统一存 `stable`，因为它是「读取 `latest` 这个 dist-tag」的频道名，而不是 tag 本身。
+- **`POST /auto-update/api/v1/channel`**（body `{"channel":"next"}`）：与面板同一个入口，`stable`/`latest`、`next`、`alpha` 都认，未知频道返回 400 且不改动任何状态。
+
+### 变更
+
+- **切换频道会作废旧频道留下的判断**：`check` 与 `deferral` 一起清空。不这么做的话，一个已经按 `next` 排队、只因等空闲而推迟的版本，会在用户切回 `latest` 之后照样被安装 —— 那是「用户刚说不想要，插件却照旧执行」。
+- **配置文件仍然是基线，且优先级更高**：状态里的 `configuredChannel` 记着 profile 那一行的值；一旦它变了（操作者动了文件），面板上一次点击的覆盖就被退休（`channelOverride` 归 `null`）。规则是「更新的一次决定赢」，而改文件是更新的一次。
+
+### 验证
+
+- **`test/plugin.test.mjs` 新增用例**（走真实路由，不直接调函数）：切到 `next` 后状态文件里 `channel=next`、`channelOverride=next`、`configuredChannel=stable`、`check=null`；再写 `latest` 得到 `stable`（别名）；写 `nightly` 得到 400 且状态不变；重启（同一 `DSH_HOME` 再 `apply` 一次）后仍是 `next`；把 profile 行改成 `alpha` 再启动 → `channel=alpha`、`channelOverride=null`。
+- `node test/run.mjs` → `11/11 test files passed`（本机 Windows，node v24）。
+
+### 升级之后你会看到什么
+
+面板上多了一行「频道 / Channel」，默认值就是你 profile 里那一行（本机是 `next`）。切到 `latest` 后，如果当前在跑的是 `0.2.0-rc.2`，判断会回到 `up-to-date`；之前那条为 `0.2.1-rc.2` 挂着的「等空闲」推迟记录会被清掉。状态接口里多了 `channelOverride` 与 `configuredChannel` 两个字段。
+
+### 降级 / 回滚
+
+退回 `0.2.2` 后面板不再有选择器，`channel` 回到「只由配置文件决定」；状态文件里多出来的两个字段会被旧版本忽略，不影响启动，也不需要手工清理。频道本身没有副作用，回滚不会造成已安装版本的变化。
+
 ## [0.2.2] — 2026-10-18
 
 这一版修的是**兼容性闸门的误判**：它把一个完全正常的版本判成了会弄坏 GUI 的升级。
@@ -187,7 +218,8 @@
 - `npm test`：9 个文件全绿（`9/9 test files passed`），只依赖 `node:` 内置模块，没有第三方依赖、没有安装步骤。
 - 真机实测记录（2026-10-15，插件 `0.1.3` 与 `0.1.5`，harness `0.2.0-rc.2`）：见 `README.md` 的「已验证的事实（本机实测）」—— 组合树包含插件行、状态接口 `globalInstall=true`、桌面端巡检与真机打包（`electron-builder 26.15.3 --win dir` exit 0）、以及两个真机撞出来的坑（产物 `package.json` 带 UTF-8 BOM 被 `JSON.parse` 拒绝；`DSH Desktop.exe` 正在运行时打包被跳过）。**这一节本身没有重新跑过那条真机审计**，记录的是这次审计当时的结论，原样保留在 README 里。
 
-[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.2...HEAD
+[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.1.7...v0.2.0

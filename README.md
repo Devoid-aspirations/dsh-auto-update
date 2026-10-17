@@ -228,7 +228,7 @@ node scripts/verify-in-harness.mjs
 | --- | --- | --- |
 | `enabled` | `true` | 总开关 |
 | `package` | `@deepseek-ai/dsh` | 要更新的包 |
-| `channel` | `stable` | 跟随的发布频道（映射到 npm dist-tag 集合） |
+| `channel` | `stable` | 跟随的发布频道（映射到 npm dist-tag 集合）；`latest` 是 `stable` 的同义写法。面板也能改，改了以面板为准（见「观察与控制」） |
 | `checkIntervalMinutes` | `30` | 检查间隔 |
 | `startupCheckDelaySeconds` | `120` | 启动后多久做第一次检查 |
 | `autoApply` | `true` | 是否自动安装（`false` 时只检测+提示，但 HTTP/工具仍可手动触发） |
@@ -258,7 +258,9 @@ node scripts/verify-in-harness.mjs
 ## 观察与控制
 
 **面板页**（无需构建、直接打开）：`http://127.0.0.1:3080/auto-update/`
-—— 当前版本、候选版本、判断理由、推迟原因、历史记录、日志尾部，以及「立即检查 / 立即更新」按钮。
+—— 当前版本、候选版本、判断理由、推迟原因、历史记录、日志尾部，以及「立即检查 / 立即更新」按钮和**频道选择器**（`latest` / `next` / `alpha`）。
+
+频道选择器选的是「接受哪条发布线」：`latest` 只收正式版，`next` 连预发布一起收（`next` 频道等于 `{latest, next}` 的并集，所以待在 next 上不会漏掉正式版）。选完写进状态文件，**重启后仍然生效**；切完约 20 秒内自动重新检查一次，旧频道留下的候选和「等空闲」的推迟记录会一起作废 —— 否则刚排队的 next 版本会在切回 latest 之后照样被装上。反过来，如果你后来改了 profile 里那一行的 `channel`，以**文件为准**：面板上早先那次点击会被退休（状态里 `channelOverride` 归 `null`，`configuredChannel` 记着文件的值）。
 
 **入口**：侧边栏底部有一个「自动更新」按钮（宽栏时带文字，折叠时只剩图标），它在**设置**与**远程访问**之间自占一行；点它会打开上面这个面板 —— 当前会话页不会被顶掉。打开方式看宿主：DSH Desktop 里交给**系统默认浏览器**（`window.dshDesktop.openExternal`；桌面端里的 `window.open` 会被接成 Electron 子窗口），普通浏览器里是新标签页。这个按钮是插件自己的浏览器半边（`lib/client.js`，走宿主给插件包的模块表注册，不需要构建），所以它只出现在 Web 界面里，并且要在**装好副本 + 重启 harness** 之后才会出现。
 
@@ -270,6 +272,7 @@ node scripts/verify-in-harness.mjs
 | --- | --- | --- |
 | `GET` | `/auto-update/api/v1/status` | 完整状态文档 |
 | `POST` | `/auto-update/api/v1/check` | 立即检查一次 |
+| `POST` | `/auto-update/api/v1/channel` | 切换频道（body：`{"channel":"next"}`；`stable`/`latest`、`next`、`alpha`） |
 | `POST` | `/auto-update/api/v1/apply` | 立即更新（可选 body：`{"version":"0.2.0-rc.2"}`） |
 | `POST` | `/auto-update/api/v1/desktop` | 立即做一次桌面端同步（面板上的「同步桌面端」按钮走的就是它） |
 | `GET` | `/auto-update/api/v1/log?lines=200` | 日志尾部（`format=json` 可换成数组） |
