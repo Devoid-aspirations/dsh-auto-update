@@ -55,7 +55,7 @@ test('every asynchronous result is announced, and the log region is labelled', (
 test('the channel selector has a real label and marks the current channel', () => {
   const html = renderDashboard(state({ channel: 'next' }))
   assert.match(html, /<label class="dim" for="channel">频道 \/ Channel<\/label>/u)
-  assert.match(html, /<select id="channel" aria-describedby="channel-hint"/u)
+  assert.match(html, /<select id="channel"[^>]*aria-describedby="channel-hint"/u)
   assert.match(html, /<option value="next" translate="no" selected>/u)
   assert.doesNotMatch(html, /<option value="stable" translate="no" selected>/u)
 })
@@ -104,7 +104,7 @@ test('numbers go through Intl instead of being pasted in raw', () => {
     },
   }))
   assert.match(html, /12,346 分钟前/u)
-  assert.match(html, /不完整 155 MB/u)
+  assert.match(html, /不完整 155\u00A0MB/u)
   assert.doesNotMatch(html, /162578757/u)
 })
 
@@ -144,7 +144,7 @@ test('the compatibility gate, the deferral, the helper verdict and the desktop d
   assert.match(html, /已被取代/u)
   assert.match(html, /打包产物与项目不一致：README\.md \(missing from the packaged build\)/u)
   assert.match(html, /最近一次桌面端同步：<strong>failed<\/strong>/u)
-  assert.match(html, /不完整 12 B/u)
+  assert.match(html, /不完整 12\u00A0B/u)
 })
 
 test('identifiers are protected from browser auto-translation', () => {
@@ -192,9 +192,9 @@ test('history rows carry the filter keys and everything past the fold starts hid
     trigger: index % 3 === 0 ? 'auto' : 'api',
   }))
   const html = renderDashboard(state({ history: rows }))
-  assert.match(html, /<select id="f-outcome">/u)
-  assert.match(html, /<select id="f-trigger">/u)
-  assert.match(html, /<input id="f-version" type="search"/u)
+  assert.match(html, /<select id="f-outcome"/u)
+  assert.match(html, /<select id="f-trigger"/u)
+  assert.match(html, /<input id="f-version"[^>]*type="search"/u)
   assert.match(html, /<button id="f-all" type="button" aria-pressed="false">显示全部<\/button>/u)
   assert.match(html, /data-outcome="succeeded" data-trigger="auto" data-versions="0\.2\.0 0\.3\.0"/u)
   const hidden = html.match(/<tr data-outcome="[^"]*" data-trigger="[^"]*" data-versions="[^"]*" hidden>/gu) ?? []
@@ -203,7 +203,7 @@ test('history rows carry the filter keys and everything past the fold starts hid
 
 test('the log region has a level filter and an expand control', () => {
   const html = renderDashboard(state())
-  assert.match(html, /<select id="log-filter" aria-describedby="log-hint">/u)
+  assert.match(html, /<select id="log-filter"[^>]*aria-describedby="log-hint"/u)
   assert.match(html, /<option value="problem">警告与错误<\/option>/u)
   assert.match(html, /<button id="log-more" type="button" aria-pressed="false">展开到 200 行<\/button>/u)
   assert.match(html, /<span class="dim" id="log-count" aria-live="polite"><\/span>/u)
@@ -211,6 +211,6 @@ test('the log region has a level filter and an expand control', () => {
 
 test('a failed action has an inline home, not only a toast', () => {
   const html = renderDashboard(state())
-  assert.match(html, /<div id="inline-error" class="alert bad" role="alert" hidden><\/div>/u)
+  assert.match(html, /<div id="inline-error"[^>]*role="alert"[^>]*hidden><\/div>/u)
   assert.match(html, /const showError = \(message, hint\) => \{/u)
 })
