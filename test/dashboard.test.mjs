@@ -150,5 +150,67 @@ test('the compatibility gate, the deferral, the helper verdict and the desktop d
 test('identifiers are protected from browser auto-translation', () => {
   const html = renderDashboard(state())
   assert.match(html, /<code translate="no">@deepseek-ai\/dsh<\/code>/u)
-  assert.match(html, /<div class="v" translate="no">0\.3\.0<\/div>/u)
+  assert.match(html, /<strong class="mono" translate="no">0\.3\.0<\/strong>/u)
+  assert.match(html, /<option value="next" translate="no">/u)
+})
+
+test('the page opens with the three-line summary and folds everything else', () => {
+  const html = renderDashboard(state())
+  assert.match(html, /<section class="status" aria-labelledby="status-heading">/u)
+  assert.match(html, /<span class="chip ok">一切就绪<\/span>/u)
+  assert.match(html, /<dt>上次检查<\/dt><dd><time datetime="2026-10-17T17:08:24\.086Z" data-ts>/u)
+  assert.match(html, /<dt>结果<\/dt>/u)
+  assert.match(html, /<dt>需要你动手<\/dt>/u)
+  assert.match(html, /<strong class="ok">不需要<\/strong>/u)
+  assert.match(html, /<details class="more">\s*<summary>更多细节 \/ Details<\/summary>/u)
+  // The version cards are gone; those figures live in the folded details now.
+  assert.doesNotMatch(html, /<div class="cards">/u)
+  assert.match(html, /<dt>运行中<\/dt>/u)
+  assert.match(html, /<dt>磁盘上<\/dt>/u)
+})
+
+test('the last-check timestamp comes from checkedAt, the field the status document really uses', () => {
+  const html = renderDashboard(state({
+    check: { decision: 'up-to-date', reason: '', checkedAt: 1792256904086, candidate: null },
+  }))
+  assert.match(html, /<dt>上次检查<\/dt><dd><time datetime="2026-10-17T17:08:24\.086Z" data-ts>/u)
+})
+
+test('a stale desktop build becomes a line the reader has to act on', () => {
+  const html = renderDashboard(state({
+    desktop: { mode: 'package', action: 'package', stale: true, reason: 'drift', drift: ['README.md'], zip: null },
+  }))
+  assert.match(html, /<strong class="warn">是<\/strong> — 桌面端分发件与项目不一致/u)
+})
+
+test('history rows carry the filter keys and everything past the fold starts hidden', () => {
+  const rows = Array.from({ length: 13 }, (_, index) => ({
+    at: 1792256904086 + index * 1000,
+    from: `0.2.${index}`,
+    to: `0.3.${index}`,
+    outcome: index % 2 === 0 ? 'succeeded' : 'failed',
+    trigger: index % 3 === 0 ? 'auto' : 'api',
+  }))
+  const html = renderDashboard(state({ history: rows }))
+  assert.match(html, /<select id="f-outcome">/u)
+  assert.match(html, /<select id="f-trigger">/u)
+  assert.match(html, /<input id="f-version" type="search"/u)
+  assert.match(html, /<button id="f-all" type="button" aria-pressed="false">显示全部<\/button>/u)
+  assert.match(html, /data-outcome="succeeded" data-trigger="auto" data-versions="0\.2\.0 0\.3\.0"/u)
+  const hidden = html.match(/<tr data-outcome="[^"]*" data-trigger="[^"]*" data-versions="[^"]*" hidden>/gu) ?? []
+  assert.equal(hidden.length, 3, 'the three rows past the ten-row fold stay hidden until asked for')
+})
+
+test('the log region has a level filter and an expand control', () => {
+  const html = renderDashboard(state())
+  assert.match(html, /<select id="log-filter" aria-describedby="log-hint">/u)
+  assert.match(html, /<option value="problem">警告与错误<\/option>/u)
+  assert.match(html, /<button id="log-more" type="button" aria-pressed="false">展开到 200 行<\/button>/u)
+  assert.match(html, /<span class="dim" id="log-count" aria-live="polite"><\/span>/u)
+})
+
+test('a failed action has an inline home, not only a toast', () => {
+  const html = renderDashboard(state())
+  assert.match(html, /<div id="inline-error" class="alert bad" role="alert" hidden><\/div>/u)
+  assert.match(html, /const showError = \(message, hint\) => \{/u)
 })
