@@ -12,6 +12,39 @@
 >
 > 还有一件事要写清楚：`0.1.5` **从未打过 tag**，所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退到那一版，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上（`v0.1.6` 与 `v0.1.7` 都已存在）。
 
+## [0.4.0] — 2026-10-18
+
+这一版仍然只动**面板这一张页面**，检测、安装、重启一条链路都没改。上一版（`0.3.1`）解决的是「能不能用」，这一版解决的是「打开之后几秒钟内知不知道自己该做什么」。
+
+### 现象
+
+面板之前是平铺的：六张版本卡片、四个按钮、频道选择器、一大段「当前判断」详情、全部历史、以及 500 行日志一起摊在一屏里。读者打开页面，第一眼看到的是六张数字卡片，而真正的问题——**它现在正常吗、上一步成没成、有没有事等我做**——要自己拼。
+
+### 改动（四条信息架构）
+
+- **一句结论先行**。首屏只有三行：`现在`（一句话结论，带结论标签）、`上次检查`、`需要你动手`。版本、宿主、重启方式、桌面端、插件市场、日志位置这些读数全部收进「更多细节 / Details」折叠区；结论措辞按判定分支（`update` / `plugin-incompatible` / 等待空闲 / 升级中 / 失败 / `registry-unreachable`）分别写，不用枚举值充数。
+- **历史可筛选**。结果（全部 / 成功 / 失败 / 推迟 / 已回滚）、触发者（全部 / 手动 / 自动）、版本号模糊匹配三个筛选器，右上角 `显示 x / y`，超过 5 行收在「显示全部」后面。原来只能从头读到尾。
+- **日志默认截断且可筛**。默认 50 行、可「展开到 200 行」、可按判定或频道变更过滤；页面写明「过滤只作用于已经取到的那一段」——选「全部」之后显示的仍是最新 50 行，不会假装是全量。
+- **动作失败内联**。失败不再只有 6 秒就消失的 toast：错误停在按钮下方（`role="alert"`，可被读屏听到），点下一次动作才清掉。四个动作共用这一块，不各写一套。
+
+### 顺带修掉的缺陷
+
+面板的「上次检查」一直显示 `—`：代码读 `state.check.at`，而状态文档里真正的字段是 **`state.check.checkedAt`**（`lib/index.js` 的检查结果写入）。已在两处取值处补上 `checkedAt ?? at`，并加了一条用真实字段名渲染的回归用例——这个 bug 之前一直在测试盲区里，因为测试的假状态自己用了 `at`。
+
+### 验证
+
+- `test/dashboard.test.mjs` 从 9 个用例涨到 **15 个**：三行摘要与折叠区、结论标签按判定分支、频道不显示内部名 `stable`、历史筛选器带齐 `data-outcome`/`data-trigger`/`data-version`、超出窗口的历史行默认 `hidden`、`显示 x / y`、日志 `只看` 与「展开到 200 行」、失败内联而不是只在 toast 里、3×5 表格不带 `scope` 但带 `caption` 与 `th`、以及 `checkedAt` 这两条时间来源。
+- `node test/run.mjs` → `12/12 test files passed`（12 个测试文件、全部通过）。
+- 真机渲染核对：用运行中实例的 `/auto-update/api/v1/status` 渲染同一份 `renderDashboard()`，在 Edge 无头里按 1000px 与 430px 两档截图；`window.innerWidth` 504px 时 `document.documentElement.scrollWidth` 也是 504px，没有横向溢出。
+
+### 升级之后你会看到什么
+
+`/auto-update/` 打开就是三行结论，其余按需展开；按钮、频道选择器、`release:check`、`auto_update` 工具的行为都没变。上一版（`0.3.1`）的键盘焦点环、`prefers-reduced-motion`、`aria-live` 也都还在。
+
+### 降级 / 回滚
+
+面板是每次请求渲染的单文件 HTML，退回 `0.3.1` 只是回到旧布局：没有状态文件形状变化、没有新配置键、没有助手协议改动。已经写下的历史记录与日志不受影响。
+
 ## [0.3.1] — 2026-10-18
 
 这一版只改**面板这一张页面**，不动检测、安装、重启任何一条链路。改法是拿[Vercel Web Interface Guidelines](https://github.com/vercel-labs/web-interface-guidelines)（`command.md`，8055 字节）把 `lib/dashboard.js` 逐条过了一遍，把 P0/P1 项全部处理。
@@ -256,7 +289,8 @@
 - `npm test`：9 个文件全绿（`9/9 test files passed`），只依赖 `node:` 内置模块，没有第三方依赖、没有安装步骤。
 - 真机实测记录（2026-10-15，插件 `0.1.3` 与 `0.1.5`，harness `0.2.0-rc.2`）：见 `README.md` 的「已验证的事实（本机实测）」—— 组合树包含插件行、状态接口 `globalInstall=true`、桌面端巡检与真机打包（`electron-builder 26.15.3 --win dir` exit 0）、以及两个真机撞出来的坑（产物 `package.json` 带 UTF-8 BOM 被 `JSON.parse` 拒绝；`DSH Desktop.exe` 正在运行时打包被跳过）。**这一节本身没有重新跑过那条真机审计**，记录的是这次审计当时的结论，原样保留在 README 里。
 
-[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.3.1...HEAD
+[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.1...v0.2.2
