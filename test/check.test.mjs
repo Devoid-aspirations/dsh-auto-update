@@ -163,7 +163,11 @@ test('the disk version is what an update is measured against', async () => {
   assert.equal(result.onDisk, '0.1.0-rc.7')
 })
 
-test('the candidate reports which packages the target release stops shipping', async () => {
+test('the check does not guess which packages the target drops from its dependency map', async () => {
+  // The harness ships its client packages transitively, so a version's own
+  // `dependencies` names only a fraction of the installed tree. Diffing the two
+  // called every transitive package "removed" and blocked a sound release; the
+  // answer now comes from probing the registry for the names plugins mention.
   const doc = packument({
     latest: '0.2.0-rc.2',
     dependencies: { '@deepseek-ai/dsh-base': '0.2.0-rc.2', '@deepseek-ai/dsh-client-store': '0.2.0-rc.2', 'js-yaml': '^4' },
@@ -171,7 +175,7 @@ test('the candidate reports which packages the target release stops shipping', a
   const running = new Set(['dsh-base', 'dsh-client-runtime', 'dsh-client-store', 'dsh-web-app'])
 
   const withBaseline = await run({ doc, runningPackages: running })
-  assert.deepEqual(withBaseline.removedPackages, ['dsh-client-runtime', 'dsh-web-app'], 'what the target no longer lists is what the gate has to worry about')
+  assert.deepEqual(withBaseline.removedPackages, [], 'the check leaves the removal verdict to the compatibility gate')
 
   const withoutBaseline = await run({ doc })
   assert.deepEqual(withoutBaseline.removedPackages, [], 'with nothing to compare against, the answer is empty rather than a guess')

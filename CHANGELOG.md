@@ -12,6 +12,36 @@
 >
 > 还有一件事要写清楚：`0.1.5` **从未打过 tag**，所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退到那一版，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上（`v0.1.6` 与 `v0.1.7` 都已存在）。
 
+## [0.2.2] — 2026-10-18
+
+这一版修的是**兼容性闸门的误判**：它把一个完全正常的版本判成了会弄坏 GUI 的升级。
+
+现象：`0.2.1` 跑起来之后，检查终于连上 registry、也找到了 `0.2.1-rc.2`，但判定是 `plugin-incompatible` —— 理由写「5 个 profile 插件硬依赖它移除的包」，列出的移除名单里有两百多个名字，从 `cordis-plugin-group`、`cosmokit`、`libreoffice-kit` 一直到 `dsh-client-ui-primitives`。这些包并没有消失。
+
+根因是**两边比的不是同一层**：闸门拿「已安装的 `node_modules/@deepseek-ai/` 目录」（本机 250 个包，含全部传递依赖）去减「目标版本 `package.json` 的 `dependencies`」（86 条直接依赖）。宿主把客户端包传递地装进来，所以在那个减法里，每一个传递依赖都成了「目标版本不再提供」。闸门的真实信号——`@deepseek-ai/dsh-client-runtime` 这类**确实**被移掉的包——恰好是传递依赖，于是这个错误算法当初误打误撞拦对了一次，平时则一路误报；本机 profile 里装着 5 个硬依赖 `dsh-client-ui-primitives` 的客户端插件，于是升级被永久挡住。
+
+### 修复
+
+- **改问 registry「目标版本还发不发这个包」**：`@deepseek-ai/*` 与宿主锁步发版，所以 `@deepseek-ai/<名字>@<目标版本>` 存在就说明它随这次升级进树，不存在才是真的被移除。`missingFromTarget()` 就是这个判定，探针由调用方注入（测试可替身），探针自己出错时**不算移除**（沉默是安全方向）。
+- **候选名单只取插件真正提到的包**：`collectClientReferences()` 读每个客户端插件的 `dsh.client.inject` 与 bundle 里**字面量**的 `require("@deepseek-ai/…")`。本机实测 8 个客户端插件共 14 个名字，每个一次轻量请求，不再去猜那 250 个包里的每一个。
+- **运行期拼出来的名字不猜**：`["@deepseek-ai/dsh-client", "-store"].join("")` 只取片段会得到 `dsh-client` 这个从未存在的包名，它的「不存在」会被读成「被移除」，所以只认字面量 `require`。
+- `check.js` 不再从 packument 的 `dependencies` 推算移除名单（那段逻辑删掉，`removedPackages` 保留为闸门的计算结果）。
+
+### 验证
+
+- **拿本机真实 profile 跑新判定**：8 个客户端插件、14 个引用（`dsh-client-ui-primitives`、`dsh-client-ui-sidebar`、`dsh-api-remotes` …），对 `0.2.1-rc.2` 与 `0.2.0-rc.2` 的结果都是 **removed: none** —— 与事实一致（`@deepseek-ai/dsh-client-ui-primitives@0.2.1-rc.2` 确实存在，而 `@deepseek-ai/dsh-client-runtime` 最高只到 `0.1.x`，仍是可得出的真移除）。
+- **`test/compat.test.mjs`（新增 3 个用例）**：引用收集只认 `require` 字面量与 `inject`（运行期拼接不猜）、`missingFromTarget` 只把目标版本不发布的包判成移除、探针抛错时不判移除。
+- **`test/check.test.mjs`** 改断言：检查不再从依赖表推算移除名单，`removedPackages` 交给闸门。
+- `node test/run.mjs` → `11/11 test files passed`（本机 Windows，node v24）。
+
+### 升级之后你会看到什么
+
+本机 profile 里那 5 个「硬依赖 primitives」的插件不再被当成阻断项，`0.2.1-rc.2` 的判定回到 `update`，按空闲策略自己安装。状态接口的 `check.compatibility.removed` 里应该只剩真正被移除的包（这次是空的）。
+
+### 降级 / 回滚
+
+退回 `0.2.1` 会回到「传递依赖被当成移除、闸门误拦」的行为。状态文件形状、配置键、助手协议都没有变化；被误拦过一次的机器上 `check.decision` 会一直是 `plugin-incompatible` 直到退回。
+
 ## [0.2.1] — 2026-10-17
 
 这一版修的是**检测本身**：在能解析到 `undici` 的机器上，更新检查从来没连上过 registry。
@@ -157,7 +187,8 @@
 - `npm test`：9 个文件全绿（`9/9 test files passed`），只依赖 `node:` 内置模块，没有第三方依赖、没有安装步骤。
 - 真机实测记录（2026-10-15，插件 `0.1.3` 与 `0.1.5`，harness `0.2.0-rc.2`）：见 `README.md` 的「已验证的事实（本机实测）」—— 组合树包含插件行、状态接口 `globalInstall=true`、桌面端巡检与真机打包（`electron-builder 26.15.3 --win dir` exit 0）、以及两个真机撞出来的坑（产物 `package.json` 带 UTF-8 BOM 被 `JSON.parse` 拒绝；`DSH Desktop.exe` 正在运行时打包被跳过）。**这一节本身没有重新跑过那条真机审计**，记录的是这次审计当时的结论，原样保留在 README 里。
 
-[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.1...HEAD
+[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.1.6...v0.1.7

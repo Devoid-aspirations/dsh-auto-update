@@ -18,6 +18,8 @@ import test from 'node:test'
 import {
   applyCompatibilityGate,
   clientBundleOf,
+  collectClientReferences,
+  missingFromTarget,
   packageNamesIn,
   referenceKind,
   removedPackages,
@@ -222,4 +224,48 @@ test('the running package set reads the harness install', () => {
   assert.equal(runningPackageSet(null).size, 0)
   assert.equal(packageNamesIn(join(root, 'missing')).size, 0)
   clean(root)
+})
+
+test('the references come from what plugins mention, not from the target dependency map', () => {
+  const modules = profileWith({
+    'plugin-a': {
+      manifest: { name: 'plugin-a', version: '1.0.0', dsh: { client: { platform: 'web', inject: ['@deepseek-ai/dsh-client-ui-primitives'] } } },
+      bundle: OLD_STYLE,
+    },
+    'plugin-b': {
+      manifest: { name: 'plugin-b', version: '1.0.0', dsh: { client: { platform: 'web', inject: [] } } },
+      bundle: NEW_STYLE,
+    },
+    'not-a-plugin': { manifest: { name: 'not-a-plugin', version: '1.0.0' } },
+  })
+
+  const references = collectClientReferences({ modulesDir: modules, names: ['plugin-a', 'plugin-b', 'not-a-plugin', 'missing'] })
+  assert.deepEqual(
+    references.refs,
+    ['dsh-client-runtime', 'dsh-client-ui-primitives'],
+    'a literal require and a declared inject are candidates; a name assembled at runtime is not guessed at',
+  )
+  assert.equal(references.scanned, 2, 'only the two packages with a dsh.client block are client plugins')
+  assert.equal(references.unreadable, 1, 'the missing package is counted, not fatal')
+  clean(join(modules, '..'))
+})
+
+test('a package the target no longer publishes is the only thing called removed', async () => {
+  const asked = []
+  const removed = await missingFromTarget(['dsh-client-ui-primitives', 'dsh-client-runtime', 'dsh-client-store'], async (name) => {
+    asked.push(name)
+    if (name === 'dsh-client-ui-primitives') return true
+    return name !== 'dsh-client-runtime'
+  })
+
+  assert.deepEqual(removed, ['dsh-client-runtime'], 'the two the target still publishes are not accused')
+  assert.deepEqual(asked.sort(), ['dsh-client-runtime', 'dsh-client-store', 'dsh-client-ui-primitives'])
+})
+
+test('a probe that cannot answer does not accuse the release of dropping a package', async () => {
+  const removed = await missingFromTarget(['flaky'], async () => {
+    throw new Error('registry hiccup')
+  })
+  assert.deepEqual(removed, [])
+  assert.deepEqual(await missingFromTarget([], async () => false), [])
 })
