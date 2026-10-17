@@ -31,7 +31,7 @@ dsh plugin --profile web add "file:$PWD"
 - 通过 `package.json` 的 `exports["./client"]` 与 `dsh.client = { platform: "web", inject: [...] }` 被宿主的插件表发现，`platform` 是必填项；
 - 注册的是**槽位** `sidebar.footer.action`，不接管页面、不替换路由，因此和面板、状态接口互不干扰；
 - 打开方式看宿主：DSH Desktop 的 preload 桥接暴露 `window.dshDesktop.openExternal`，有它就交给系统默认浏览器（桌面端里的 `window.open` 会被窗口打开处理器接成 Electron 子窗口，而面板只对回环开放）；没有就用新标签页；
-- 样式只有几行 CSS，用主题 token（`--dsw-alias-label-primary`、`--dsw-alias-interactive-bg-hover`），亮色暗色都不需要单独适配；重复 `apply` 只保留一份样式表。排布靠 `order`：底部那一列的锚点都是 `display:contents`，`@linxin666/dsh-remote-web-ui` 占用了 1/3/4（其他贡献 / 设置 / 它自己的入口），本插件取 4、把它的入口挤到 5，所以自上而下是「设置 → 自动更新 → 远程访问」。
+- 样式只有几行 CSS，用主题 token（`--dsw-alias-label-primary`、`--dsw-alias-interactive-bg-hover`），亮色暗色都不需要单独适配；重复 `apply` 只保留一份样式表。排布靠 CSS 的 `order` 与运行时实测校正（后者是 0.2.2 之后补的，见后面的版本）。
 
 ## 验证
 
