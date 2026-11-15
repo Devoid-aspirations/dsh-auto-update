@@ -12,6 +12,31 @@
 >
 > 还有一件事要写清楚：`0.1.5` **从未打过 tag**，所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退到那一版，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上（`v0.1.6` 与 `v0.1.7` 都已存在）。
 
+## [0.5.1] — 2026-11-15
+
+这一版只改**一笔失败记录长什么样**，以及失败之后机器被留在什么状态。检测、频道、面板、桌面端同步都没动。
+
+### 为什么改
+
+`0.2.2-rc.3` 那次自动升级连输四次，面板上只写「npm install exited with code 4294963214」——这个数字是 `-4082` 的无符号写法，真正的句子（`EBUSY: resource busy or locked, rename …\@deepseek-ai\dsh\lib -> …\.dsh-L8W43X9e\lib`）只出现在 `update.log` 里，而触发它的原因根本不在 npm 那边：
+
+正在运行的 harness 用目录句柄占着自己的安装目录。插件的顺序是「先装、再请宿主停、最后起回来」，所以只要宿主活着，npm 就没法把那棵要替换的目录挪开——Windows 上四次都是同一个 `EBUSY`，版本一动没动。
+
+### 改了什么
+
+- **装了才发现锁，就先停再重试一次。** `installGlobal` 的失败文本里出现 `EBUSY` / `EPERM` / `errno -4082` 这类形态时，先请求宿主退出、确认端口空了，再重试安装。判定刻意收窄：别的 npm 失败（版本不存在、registry 拒绝）**不会**让用户的 harness 白停一次。
+- **重试也失败就把旧版本拉起来。** 停过宿主之后如果安装仍然失败，走原来的启动路径把还在盘上的那个版本起回来，并用状态接口确认它真的在应答，然后才把 `phase: failed` 和「已重启回 X」写进记录。
+- **失败原因写成 npm 自己的话。** `describeInstallFailure()` 取最后三行 `npm error`，截断到 400 字，写进 `helper.json` 的 `error`——面板和日志现在能看到 `EBUSY … rename …`，不再是裸退出码。
+- `installGlobal` 的返回是 `{code, output, lines}`，**没有** `stderr`：输出被直接流进日志文件了。匹配与摘要统一走 `failureText()`，不回读 `stderr`。
+
+上游报告：<https://github.com/deepseek-ai/deepseek-harness/discussions/13415> —— 起因是 harness 占着自己安装目录的**目录句柄**，而且 Windows 的 Restart Manager 查不出来（它只报没带 FILE_SHARE_DELETE 的文件句柄），所以「谁在占用」这个问题必须用 handle64 才能回答。
+
+### 验证
+
+- `test/helper-e2e.test.mjs` 新增两例（真实进程、假 npm、假 harness）：锁一次 → 先停后装成功；锁一次 + 第二次仍失败 → 旧版本重新服务。断言顺序的方式是让假 npm 在每次安装时记录「此刻宿主管停过没有」：`install attempt 1 host-stopped=no`、`install attempt 2 host-stopped=yes`。
+- 既有的「装失败不改任何东西」一例加了两条断言：错误里要出现 npm 的原因（`E404 fake npm refuses`），并且宿主**从未**被请求停机——锁判定收窄的证据。
+- `12/12 test files passed`；helper 端到端 8/8。
+
 ## [0.5.0] — 2026-10-18
 
 这一版只改**面板长什么样**：检测、安装、重启、桌面端同步的逻辑一行没动，`lib/` 里只有 `lib/dashboard.js` 变了。
@@ -323,7 +348,8 @@
 - `npm test`：9 个文件全绿（`9/9 test files passed`），只依赖 `node:` 内置模块，没有第三方依赖、没有安装步骤。
 - 真机实测记录（2026-10-15，插件 `0.1.3` 与 `0.1.5`，harness `0.2.0-rc.2`）：见 `README.md` 的「已验证的事实（本机实测）」—— 组合树包含插件行、状态接口 `globalInstall=true`、桌面端巡检与真机打包（`electron-builder 26.15.3 --win dir` exit 0）、以及两个真机撞出来的坑（产物 `package.json` 带 UTF-8 BOM 被 `JSON.parse` 拒绝；`DSH Desktop.exe` 正在运行时打包被跳过）。**这一节本身没有重新跑过那条真机审计**，记录的是这次审计当时的结论，原样保留在 README 里。
 
-[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.5.0...HEAD
+[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.3.0...v0.3.1

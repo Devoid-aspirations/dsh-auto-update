@@ -52,11 +52,11 @@ function readTail(file, bytes = 2000) {
 /**
  * Build the sandbox: a fake global root holding the current version, a fake
  * npm, a running "harness", and a written plan.
- * @param {{failNewVersion?: boolean, npmFails?: boolean, desktop?: boolean, noVersion?: boolean, strictShutdown?: boolean}} [options] - which way to break the world.
+ * @param {{failNewVersion?: boolean, npmFails?: boolean, npmLocked?: number, desktop?: boolean, noVersion?: boolean, strictShutdown?: boolean}} [options] - which way to break the world.
  * @returns {Promise<object>} the sandbox handle.
  */
 async function setup(options = {}) {
-  const { failNewVersion = false, npmFails = false, desktop = false, noVersion = false, strictShutdown = false } = options
+  const { failNewVersion = false, npmFails = false, npmLocked = 0, desktop = false, noVersion = false, strictShutdown = false } = options
   const base = mkdtempSync(join(tmpdir(), 'dsh-auto-update-'))
   const root = join(base, 'npmroot')
   const dir = join(base, 'auto-update')
@@ -68,14 +68,17 @@ async function setup(options = {}) {
   const desktopProject = desktop ? writeDesktopProject(base) : null
   const port = await freePort()
   const npmLog = join(base, 'npm.log')
+  const shutdownLog = join(base, 'shutdown.log')
   const env = {
     ...process.env,
     FAKE_NPM_ROOT: root,
     FAKE_NPM_LOG: npmLog,
+    FAKE_SHUTDOWN_LOG: shutdownLog,
     FAKE_PORT: String(port),
     FAKE_TOKEN: 'test-token',
     ...(failNewVersion ? { FAKE_FAIL_VERSION: TO } : {}),
     ...(npmFails ? { FAKE_NPM_FAIL: '1' } : {}),
+    ...(npmLocked > 0 ? { FAKE_NPM_LOCK_COUNT: String(npmLocked), FAKE_NPM_LOCK_FILE: join(base, 'npm-lock.count') } : {}),
     ...(noVersion ? { FAKE_NO_VERSION: '1' } : {}),
     ...(strictShutdown ? { FAKE_SHUTDOWN_STRICT: '1' } : {}),
   }
@@ -195,6 +198,14 @@ async function setup(options = {}) {
       return ''
     }
   }
+  /** Empty when the harness was never asked to step aside. */
+  const readShutdownLog = () => {
+    try {
+      return readFileSync(shutdownLog, 'utf8')
+    } catch {
+      return ''
+    }
+  }
   const servingVersion = async () => {
     try {
       const response = await fetch(`${url}${STATUS_PATH}`)
@@ -206,7 +217,7 @@ async function setup(options = {}) {
     }
   }
 
-  return { base, root, dir, port, url, plan, host, runHelper, teardown, helperState, readLog, readNpmLog, servingVersion, desktopProject, currentBoot: status.bootId }
+  return { base, root, dir, port, url, plan, host, runHelper, teardown, helperState, readLog, readNpmLog, readShutdownLog, servingVersion, desktopProject, currentBoot: status.bootId }
 }
 
 test('a successful update also brings the packaged desktop wrapper in step', async (t) => {
@@ -287,10 +298,60 @@ test('a failed install changes nothing and never stops the running harness', asy
 
   const state = box.helperState()
   assert.equal(state.phase, 'failed', 'the failure is recorded')
-  assert.match(String(state.error ?? ''), /npm install exited with code 1/u, 'with npm as the stated cause')
+  assert.match(String(state.error ?? ''), /npm install failed \(exit code 1\)/u, 'with npm as the stated cause')
+  assert.match(String(state.error ?? ''), /E404 fake npm refuses/u, 'and npm\'s own words, not just an exit code')
+  assert.equal(box.readShutdownLog(), '', 'and the harness was never asked to stop')
 
   const serving = await box.servingVersion()
   assert.equal(serving?.running, FROM, 'the original process is still serving')
+})
+
+test('a locked install tree stops the harness first, then the retry goes through', async (t) => {
+  // The 0.2.2-rc.3 incident: npm could not rename the installed package because
+  // the harness running from it held the directory open, so the old order
+  // (install first, stop second) could never succeed on Windows — four attempts,
+  // four EBUSY, and no version change. The lock is not something to retry
+  // around: the harness has to step aside first, and only then can npm reify.
+  const box = await setup({ npmLocked: 1 })
+  t.after(box.teardown)
+
+  const { code } = await box.runHelper()
+  assert.equal(code, 0)
+
+  const state = box.helperState()
+  assert.equal(state.phase, 'succeeded', `helper phase (log: ${box.readLog().slice(-800)})`)
+  assert.equal(fixtureVersion(box.root, PACKAGE), TO, 'the target version is installed')
+
+  const npmLog = box.readNpmLog()
+  assert.match(npmLog, /install attempt 1 host-stopped=no/u, 'the first attempt ran before any stop')
+  assert.match(npmLog, /install attempt 2 host-stopped=yes/u, 'the retry ran after the harness stepped aside')
+  assert.match(box.readLog(), /holds it open/u, 'the log names the lock as the reason')
+  assert.match(box.readShutdownLog(), /shutdown/u, 'the harness was asked to stop through its route')
+
+  const serving = await box.servingVersion()
+  assert.equal(serving?.running, TO, 'the new version is serving')
+  assert.notEqual(serving?.bootId, box.currentBoot, 'and it is a different boot')
+})
+
+test('a retried install that still fails puts the old version back up', async (t) => {
+  // Stopping the harness is only safe because the failure path restarts what is
+  // still installed. Otherwise a lock plus a broken registry would leave the
+  // machine with nothing listening.
+  const box = await setup({ npmLocked: 1, npmFails: true })
+  t.after(box.teardown)
+
+  await box.runHelper()
+
+  const state = box.helperState()
+  assert.equal(state.phase, 'failed', 'the failure is recorded')
+  assert.match(String(state.error ?? ''), /npm install failed/u)
+  assert.match(String(state.detail ?? ''), /the harness was stopped to retry the install/u, 'the record says what was done to the machine')
+  assert.match(String(state.detail ?? ''), /is serving again/u)
+  assert.equal(fixtureVersion(box.root, PACKAGE), FROM, 'the installation is untouched')
+
+  const serving = await box.servingVersion()
+  assert.equal(serving?.running, FROM, 'the old version serves again')
+  assert.notEqual(serving?.bootId, box.currentBoot, 'from a fresh process')
 })
 
 test('a replacement that is up but cannot name its version is kept, not rolled back', async (t) => {

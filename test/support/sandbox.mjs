@@ -185,18 +185,36 @@ process.stdout.write('stub build wrote ' + manifest.version + '\\n')
  * (`root -g`, `config get registry`) and performs one global install by
  * writing the manifest the installer would have written.
  */
-const FAKE_NPM_SOURCE = `import { mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
+const FAKE_NPM_SOURCE = `import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const root = process.env.FAKE_NPM_ROOT
 const log = process.env.FAKE_NPM_LOG
 const args = process.argv.slice(2)
 const note = (line) => { if (log) appendFileSync(log, line + '\\n') }
+const hostStopped = () => Boolean(process.env.FAKE_SHUTDOWN_LOG) && existsSync(process.env.FAKE_SHUTDOWN_LOG)
 note('npm ' + args.join(' '))
 
 if (args[0] === 'root') { process.stdout.write(root + '\\n'); process.exit(0) }
 if (args[0] === 'config') { process.stdout.write((process.env.FAKE_NPM_REGISTRY ?? 'https://registry.npmjs.org') + '\\n'); process.exit(0) }
 if (args[0] === 'install') {
+  // The Windows failure this feature exists for: npm cannot replace the
+  // installed package because the harness running from it holds the directory
+  // open. Modelling it as a leading number of failed attempts keeps the real
+  // lock out of the suite while still exercising the stop-and-retry order.
+  const lockFor = Number(process.env.FAKE_NPM_LOCK_COUNT ?? '0')
+  let attempt = 1
+  if (lockFor > 0 && process.env.FAKE_NPM_LOCK_FILE) {
+    try { attempt = (Number(readFileSync(process.env.FAKE_NPM_LOCK_FILE, 'utf8')) || 0) + 1 } catch {}
+    writeFileSync(process.env.FAKE_NPM_LOCK_FILE, String(attempt))
+    note('install attempt ' + attempt + ' host-stopped=' + (hostStopped() ? 'yes' : 'no'))
+    if (attempt <= lockFor) {
+      process.stderr.write('npm error code EBUSY\\n')
+      process.stderr.write("npm error EBUSY: resource busy or locked, rename '" + join(root, 'dsh', 'lib') + "' -> '" + join(root, 'dsh', '.dsh-locked', 'lib') + "'\\n")
+      process.stderr.write('npm error errno -4082\\n')
+      process.exit(1)
+    }
+  }
   if (process.env.FAKE_NPM_FAIL === '1') { process.stderr.write('E404 fake npm refuses\\n'); process.exit(1) }
   const spec = args.find((arg) => !arg.startsWith('-') && arg !== 'install' && arg !== '-g')
   const at = spec.lastIndexOf('@')
@@ -225,7 +243,7 @@ process.exit(2)
  * shutdown route the way the plugin's own routes do, refusing anything without
  * the launch token and a same-origin `Origin`.
  */
-const FAKE_HARNESS_SOURCE = `import { readFileSync, writeFileSync } from 'node:fs'
+const FAKE_HARNESS_SOURCE = `import { readFileSync, writeFileSync, appendFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -258,6 +276,11 @@ const server = createServer((req, res) => {
         res.end(JSON.stringify({ error: 'refused', token: token ?? null, origin: origin ?? null }))
         return
       }
+    }
+    if (process.env.FAKE_SHUTDOWN_LOG) {
+      // Appended, not overwritten: the suite reads this file to learn whether a
+      // second attempt happened after the harness agreed to step aside.
+      try { appendFileSync(process.env.FAKE_SHUTDOWN_LOG, 'shutdown ' + port + '\\n') } catch {}
     }
     res.writeHead(202, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ stopping: true }))
