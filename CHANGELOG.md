@@ -12,6 +12,38 @@
 >
 > 还有一件事要写清楚：`0.1.5` **从未打过 tag**，所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退到那一版，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上（`v0.1.6` 与 `v0.1.7` 都已存在）。
 
+## [0.5.2] — 2026-11-15
+
+这一版修的是**一次真实的升级把机器和记录同时卡住**之后留下的两个洞：npm 装完了却不肯退出，插件就一直等；记录等不到终态，reconcile 就每 20 秒重播一次「已记录成功」。两处都不改策略，只改「怎么判断事情已经办完」。
+
+### 为什么改
+
+`0.2.2-rc.3` 那次手动升级（面板上的「立即更新」）最后**装成功了**：`@deepseek-ai/dsh` 的目录在 21:14:51 换成了 `0.2.2-rc.3`，`npm ls -g` 也认。但现场是这样的：
+
+- npm 进程 49524 一直活着，CPU 停在 322 秒不再增长，`helper.out.log` / `helper.err.log` 都是 0 字节 —— 它把 reify 写完之后就**不退出**了（既没有报错，也没有成功输出：`--loglevel=error` 让成功路径一声不响）。
+- 助手 49808 唯一的成功信号是 npm 的退出码，所以它一直在等，`helper.json` 冻在 `phase: "installing"`。
+- 你重新打开桌面端，把 21:20:35 起的 harness 42256 带起来了；它读到的磁盘版本已经是 `0.2.2-rc.3`，于是 `reconcile()` 认领了这条记录 —— 但 `confirmed` 分支当年**没有**「同一条记录只认一次」的守卫（0.1.7 只补过 `settled` 分支），于是从 13:20:43 到 13:26:43，每 20 秒一条 `reconciled: 0.2.2-rc.3 is running — recording the update as succeeded`。
+
+还有一处要更正当晚的判断：`installSeconds: 900` 的超时**没有失效** —— 是我在 707 秒时手动杀了 npm，它根本没到点。真正的问题是「到点也未必有用」：`child.kill()` 在 Windows 上打的是 `.cmd` 包装层，npm 可能活下来，而旧代码只等 `close` 事件，等不到就永远悬着。
+
+### 改了什么
+
+- **装完就按磁盘算数，不再等 npm 开口。** 助手在装的同时每 4 秒看一次安装树；一旦目标版本已经在盘上，就判定这次安装成立，取消 npm 并继续往下走（停宿主、验证、起回来）。日志里会写 `<版本> is on disk while npm is still running — not waiting for npm to exit`。
+- **被叫停的 npm 不会把事务拖死。** `spawnCaptured` 新增 `signal`（AbortSignal）与 5 秒硬止损：超时或被取消后先 `kill`，再等 5 秒，等不到就带着 `aborted` / `timedOut` 标记返回。`installGlobal` 把它透传出来，并在日志里注明这次是「树已经有目标版本了」才停的。
+- **`confirmed` 分支补上同一条守卫。** `reconcile()` 现在在分支之前算好 `recordId` 与 `alreadyReconciled`，`confirmed` 与 `settled` 两个分支共用；已经记过的记录不再播报、不再重写 `state.operation`。
+- 助手 `run()` 用 `globalRoot()` + `versionAt()` 取磁盘版本，顺手把包目录留在手上给上面的轮询用（原先的 `installedGlobalVersion()` 只返回版本号）。
+
+### 验证
+
+- `test/helper-e2e.test.mjs` 新增一例（真实进程、假 npm、假 harness）：假 npm 写完之后**不退出**（`FAKE_NPM_HANG_AFTER_INSTALL=1`），助手必须在几秒内判定成功并把新版本服务起来 —— 实测 7.2 秒走完全流程，`phase: succeeded`。
+- `test/plugin.test.mjs` 新增一例：把 `helper.json` 写成「目标就是正在运行的版本、但 phase 还停在 `installing`」，两次 boot 之间只允许播报一次。**用 0.5.1 的 `index.js` 跑这条会失败**（`a later tick does not announce the same frozen record again`），换成本版即通过 —— 反证过。
+- `test/support/sandbox.mjs` 的假 npm 多了这个开关，顺带把「install 分支落到底部兜底」的老结构改成 `if (args[0] !== 'install')`，否则不退出时会走到 `unsupported command` 并 exit 2。
+- `12/12 test files passed`；helper 端到端 9/9；plugin 10/10。
+
+### 降级
+
+两处都是「更快地判断已经完成」，没有新增对 npm 或 harness 的假设。要退回 `0.5.1` 直接装回即可；`helper.json` 若再被写成 `installing`，`0.5.1` 会重新开始每 20 秒播报一次，但那只是噪音，不影响再次发起升级。
+
 ## [0.5.1] — 2026-11-15
 
 这一版只改**一笔失败记录长什么样**，以及失败之后机器被留在什么状态。检测、频道、面板、桌面端同步都没动。
@@ -348,7 +380,8 @@
 - `npm test`：9 个文件全绿（`9/9 test files passed`），只依赖 `node:` 内置模块，没有第三方依赖、没有安装步骤。
 - 真机实测记录（2026-10-15，插件 `0.1.3` 与 `0.1.5`，harness `0.2.0-rc.2`）：见 `README.md` 的「已验证的事实（本机实测）」—— 组合树包含插件行、状态接口 `globalInstall=true`、桌面端巡检与真机打包（`electron-builder 26.15.3 --win dir` exit 0）、以及两个真机撞出来的坑（产物 `package.json` 带 UTF-8 BOM 被 `JSON.parse` 拒绝；`DSH Desktop.exe` 正在运行时打包被跳过）。**这一节本身没有重新跑过那条真机审计**，记录的是这次审计当时的结论，原样保留在 README 里。
 
-[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.5.1...HEAD
+[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.3.1...v0.4.0

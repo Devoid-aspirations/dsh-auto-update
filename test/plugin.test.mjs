@@ -214,9 +214,10 @@ test('a settled failure whose target is the version running now is marked supers
  * manifest-carrying `dsh` directory is what makes those rules observable.
  * @param {string} harnessRoot - directory holding the synthetic `dsh` package.
  * @param {string} dshHome - the DSH_HOME the child should write to.
- * @param {{exerciseStatus?: boolean}} [options] - `exerciseStatus` replays the
+ * @param {{exerciseStatus?: boolean, helperPhase?: string}} [options] - `exerciseStatus` replays the
  *   status read the panel performs between two ticks, which is what used to
- *   drop the stored verdict.
+ *   drop the stored verdict; `helperPhase` writes the record in that phase
+ *   (`failed` by default, `installing` for a run that never got a verdict).
  * @returns {Promise<object>} what the child measured.
  */
 function reconcileInHarness(harnessRoot, dshHome, options = {}) {
@@ -233,6 +234,7 @@ function reconcileInHarness(harnessRoot, dshHome, options = {}) {
         DSH_HOME: dshHome,
         DSH_AUTO_UPDATE_HARNESS: harnessRoot,
         DSH_AUTO_UPDATE_EXERCISE_STATUS: options.exerciseStatus === true ? '1' : '0',
+        ...(options.helperPhase === undefined ? {} : { DSH_AUTO_UPDATE_HELPER_PHASE: options.helperPhase }),
       },
     })
     let out = ''
@@ -285,6 +287,28 @@ test('a settled helper record is reconciled once, not again on every tick', asyn
     assert.equal(measured.rows, 1, 'history still carries exactly one row for it')
     assert.equal(measured.settled, true, 'and the stored verdict stays settled')
     assert.equal(measured.supersededBy, '9.9.9', 'with its supersede mark intact')
+  } finally {
+    clean(root)
+  }
+})
+
+test('a record stuck in a live phase is announced once, not on every tick', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-reconcile-installing-'))
+  try {
+    const { harnessRoot, dshHome } = harnessLayout(root)
+
+    // The shape a wedged install leaves behind: the target is running, but
+    // `helper.json` never left `installing`, because the npm it waited on was
+    // killed by hand (or finished and never exited). The record is live, so the
+    // `confirmed` branch of reconcile owns it — and that branch used to record
+    // and announce the run on every single tick, which is one line every 20s
+    // forever.
+    const measured = await reconcileInHarness(harnessRoot, dshHome, { helperPhase: 'installing' })
+
+    assert.equal(measured.afterFirst, 1, 'the run is accounted for on the boot that reconciles it')
+    assert.equal(measured.delta, 0, 'a later tick does not announce the same frozen record again')
+    assert.equal(measured.rows, 1, 'history carries exactly one row for it')
+    assert.equal(measured.settled, true, 'and the record ends up settled')
   } finally {
     clean(root)
   }

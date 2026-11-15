@@ -92,6 +92,15 @@ const running = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).runnin
 // DSH_HOME (a record a real incident left behind) instead of writing the
 // synthetic one below — the two differ in the ways that matter: a real record
 // has an old pid that is no longer running, and may predate the `id` field.
+//
+// `DSH_AUTO_UPDATE_HELPER_PHASE` picks which stuck shape to replay. `failed` is
+// the settled record whose verdict has to be superseded once; `installing` is
+// the record a wedged install leaves behind — the target is running, but the
+// file still claims a live phase, which is the branch that used to announce on
+// every tick.
+const helperPhase = process.env.DSH_AUTO_UPDATE_HELPER_PHASE ?? 'failed'
+const announcePattern =
+  helperPhase === 'installing' ? /recording the update as succeeded/gu : /is superseded/gu
 if (process.env.DSH_AUTO_UPDATE_REAL_HELPER !== '1') {
   writeFileSync(
     join(dir, HELPER_FILE),
@@ -99,10 +108,10 @@ if (process.env.DSH_AUTO_UPDATE_REAL_HELPER !== '1') {
       schema: HELPER_SCHEMA,
       id: 'frozen-record',
       pid: 999999999,
-      phase: 'failed',
+      phase: helperPhase,
       target: running,
       from: '0.0.1',
-      error: `no healthy ${running} within 90s`,
+      ...(helperPhase === 'failed' ? { error: `no healthy ${running} within 90s` } : {}),
       startedAt: 1,
       updatedAt: 2,
       trigger: 'auto',
@@ -110,7 +119,7 @@ if (process.env.DSH_AUTO_UPDATE_REAL_HELPER !== '1') {
   )
 }
 
-const supersedeLines = () => (readFileSync(join(dir, 'update.log'), 'utf8').match(/is superseded/gu) ?? []).length
+const supersedeLines = () => (readFileSync(join(dir, 'update.log'), 'utf8').match(announcePattern) ?? []).length
 boot()
 const afterFirst = supersedeLines()
 

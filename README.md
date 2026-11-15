@@ -30,6 +30,14 @@
 
 失败原因也不再是裸退出码：`helper.json` 的 `error` 与面板上写的是 npm 自己的最后几行 `npm error`（例如那行 `EBUSY … rename …`），因为 `4294963214` 这种无符号写法只能靠日志里的原文解释。
 
+### npm 装完了却不退出时：按磁盘算数
+
+同一个本地 `npm install -g` 还有第二种卡法，跟锁无关：reify 已经把那棵目录换好（`npm ls -g` 都认新版本了），npm 进程却留在原地不退出、也不再输出 —— `--loglevel=error` 让成功路径一声不响，而助手唯一的成功信号就是 npm 的退出码，于是 `helper.json` 会一直停在 `phase: "installing"`。
+
+从 `0.5.2` 起不看 npm 的脸色，看磁盘：安装期间每 4 秒取一次安装树里的版本，目标版本一出现就判定这次安装成立，取消 npm 并继续往下走（停宿主、验证、起回来）。日志里会写一行 `<版本> is on disk while npm is still running — not waiting for npm to exit`。被取消的 npm 还另有 5 秒硬止损（`spawnCaptured` 的 `signal`），到点强制返回，不再让整个事务挂在 `close` 事件上。
+
+同一版还补了记录去重：`reconcile()` 的 `confirmed` 分支原先没有「同一条记录只认一次」的守卫，一次卡在 `installing` 的记录会让宿主每 20 秒播报一遍「recording the update as succeeded」。现在是两个分支共用同一个 `recordId` 判断。
+
 ## 它不做什么（安全边界）
 
 - **不会覆盖非全局安装**：只有在「正在运行的 harness 确实位于 npm 全局根目录」时才动手。源码 checkout / 本地开发目录一律拒绝安装，只保留检测与提示。

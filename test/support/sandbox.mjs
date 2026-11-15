@@ -226,10 +226,17 @@ if (args[0] === 'install') {
   try { bin = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).bin?.dsh ?? bin } catch {}
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version, type: 'module', bin: { dsh: bin } }, null, 2))
   note('installed ' + name + '@' + version)
-  process.exit(0)
+  // A real npm can finish the reify and then fail to exit — a locked descriptor,
+  // a wedged cleanup, a wrapper that outlived its child. The tree is already
+  // correct at that point, so the helper has to read the disk rather than wait
+  // for a process that will never report.
+  if (process.env.FAKE_NPM_HANG_AFTER_INSTALL === '1') setInterval(() => {}, 1000)
+  else process.exit(0)
 }
-process.stderr.write('fake npm: unsupported command ' + args.join(' ') + '\\n')
-process.exit(2)
+if (args[0] !== 'install') {
+  process.stderr.write('fake npm: unsupported command ' + args.join(' ') + '\\n')
+  process.exit(2)
+}
 `
 
 /**

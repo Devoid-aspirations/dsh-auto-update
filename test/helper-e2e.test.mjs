@@ -52,11 +52,19 @@ function readTail(file, bytes = 2000) {
 /**
  * Build the sandbox: a fake global root holding the current version, a fake
  * npm, a running "harness", and a written plan.
- * @param {{failNewVersion?: boolean, npmFails?: boolean, npmLocked?: number, desktop?: boolean, noVersion?: boolean, strictShutdown?: boolean}} [options] - which way to break the world.
+ * @param {{failNewVersion?: boolean, npmFails?: boolean, npmLocked?: number, desktop?: boolean, noVersion?: boolean, strictShutdown?: boolean, npmHangsAfterInstall?: boolean}} [options] - which way to break the world.
  * @returns {Promise<object>} the sandbox handle.
  */
 async function setup(options = {}) {
-  const { failNewVersion = false, npmFails = false, npmLocked = 0, desktop = false, noVersion = false, strictShutdown = false } = options
+  const {
+    failNewVersion = false,
+    npmFails = false,
+    npmLocked = 0,
+    desktop = false,
+    noVersion = false,
+    strictShutdown = false,
+    npmHangsAfterInstall = false,
+  } = options
   const base = mkdtempSync(join(tmpdir(), 'dsh-auto-update-'))
   const root = join(base, 'npmroot')
   const dir = join(base, 'auto-update')
@@ -81,6 +89,7 @@ async function setup(options = {}) {
     ...(npmLocked > 0 ? { FAKE_NPM_LOCK_COUNT: String(npmLocked), FAKE_NPM_LOCK_FILE: join(base, 'npm-lock.count') } : {}),
     ...(noVersion ? { FAKE_NO_VERSION: '1' } : {}),
     ...(strictShutdown ? { FAKE_SHUTDOWN_STRICT: '1' } : {}),
+    ...(npmHangsAfterInstall ? { FAKE_NPM_HANG_AFTER_INSTALL: '1' } : {}),
   }
 
   const host = spawn(process.execPath, [join(harnessDir, 'lib', 'bin.js')], { env, stdio: 'ignore' })
@@ -396,4 +405,26 @@ test('the harness is asked to stop through the route it actually guards', async 
 
   assert.equal(box.helperState().phase, 'succeeded')
   assert.equal(box.host.exitCode !== null, true, 'the original host exited on its own')
+})
+
+test('an npm that installs and then never exits does not stall the transaction', async (t) => {
+  // The real incident: npm wrote 0.2.2-rc.3 into the tree at 21:14:51 and then
+  // sat there until it was killed by hand twenty minutes later. The helper's
+  // only signal for "the install is done" was npm's exit code, so the whole
+  // transaction waited on a process that had already finished its work — and
+  // the record stayed in `installing` the entire time.
+  const box = await setup({ npmHangsAfterInstall: true })
+  t.after(box.teardown)
+
+  const { code } = await box.runHelper()
+  assert.equal(code, 0)
+
+  const log = box.readLog()
+  assert.match(log, /is on disk while npm is still running — not waiting for npm to exit/u, `the tree is believed over the process (log: ${log.slice(-800)})`)
+  assert.equal(box.helperState().phase, 'succeeded', 'the transaction went on to restart the harness')
+  assert.equal(fixtureVersion(box.root, PACKAGE), TO, 'the tree holds the new version')
+
+  const serving = await box.servingVersion()
+  assert.equal(serving?.running, TO, 'and a replacement is serving it')
+  assert.notEqual(serving?.bootId, box.currentBoot, 'from a fresh process')
 })
