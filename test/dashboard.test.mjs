@@ -214,3 +214,48 @@ test('a failed action has an inline home, not only a toast', () => {
   assert.match(html, /<div id="inline-error"[^>]*role="alert"[^>]*hidden><\/div>/u)
   assert.match(html, /const showError = \(message, hint\) => \{/u)
 })
+
+test('an update in flight gets a five-step bar that says which step it is on', () => {
+  const html = renderDashboard(state({
+    helper: { phase: 'installing', target: '0.3.1', from: '0.3.0', startedAt: 1794749258073 },
+    operation: { phase: 'installing', target: '0.3.1', startedAt: 1794749258073 },
+    check: { decision: 'update', reason: '0.3.1 is available', at: 1794749258073, candidate: { version: '0.3.1', tag: 'latest', ageMinutes: 12 } },
+  }))
+  assert.match(html, /<section class="progress run" id="progress" data-phase="installing" data-step="2" data-live="true"/u)
+  assert.match(html, /<ol class="steps" role="progressbar"[^>]*aria-valuenow="2" aria-valuetext="安装"/u)
+  // Step one is behind us, step two is the one running, the rest are still ahead.
+  assert.match(html, /<li class="step done"><span class="step-k">1<\/span><span class="step-n">准备<\/span><\/li>/u)
+  assert.match(html, /<li class="step active"><span class="step-k">2<\/span><span class="step-n">安装<\/span><\/li>/u)
+  assert.match(html, /<li class="step todo"><span class="step-k">5<\/span><span class="step-n">完成<\/span><\/li>/u)
+  assert.match(html, /npm 在替换安装目录/u)
+  // Phase changes are announced; the per-second clock beside them is not.
+  assert.match(html, /<span id="progress-text" aria-live="polite">/u)
+})
+
+test('the bar is only as precise as the helper: a failure claims no step', () => {
+  const html = renderDashboard(state({
+    helper: { phase: 'failed', target: '0.3.1', startedAt: 1794749258073, error: 'EBUSY: resource busy or locked', settled: true },
+  }))
+  assert.match(html, /<section class="progress bad" id="progress" data-phase="failed" data-step="0"/u)
+  // No cell is marked as the one that broke, because the helper does not know.
+  assert.doesNotMatch(html, /step failed/u)
+  assert.match(html, /升级失败：EBUSY: resource busy or locked/u)
+})
+
+test('an idle page has no progress bar, and a settled one keeps it hidden', () => {
+  assert.doesNotMatch(renderDashboard(state()), /id="progress"/u)
+  const settled = renderDashboard(state({
+    helper: { phase: 'succeeded', target: '0.3.0', settled: true },
+    operation: { phase: 'succeeded', target: '0.3.0' },
+  }))
+  assert.doesNotMatch(settled, /id="progress"/u)
+})
+
+test('the bar polls itself through the restart instead of reporting it as an error', () => {
+  const html = renderDashboard(state({ helper: { phase: 'stopping', target: '0.3.1', startedAt: 1794749258073 } }))
+  assert.match(html, /const BOOT = "18552-1794750024375"|const BOOT = null/u)
+  assert.match(html, /宿主正在重启，等它回来/u)
+  assert.match(html, /location\.reload\(\)/u)
+  assert.match(html, /setInterval\(poll, 2500\)/u)
+})
+
