@@ -29,12 +29,13 @@
 - **失败不硬指某一步**：整条变红、写明原因，五格都不动 —— 助手也没记下自己死在哪一步，指一格就是一句没把握的断言。
 - 附带一个「已进行 x 分 y 秒」的走表，从助手的 `startedAt` 算起。
 - 无障碍：`role="progressbar"` 带 `aria-valuenow` / `aria-valuetext`（中文步名），相位文案在 `aria-live="polite"` 里播报；秒表不播报，否则每秒打断一次。
+- **直达发行说明**：检测到新版本时，摘要下面多一行「新版本 0.2.2-rc.4 改了什么：看官网发行说明 ↗」，点开就是上游那个 tag 的 GitHub Release 页；详情抽屉里另有「运行中的这一版」和「全部版本」两个链接，装完之后想知道自己刚吃了什么都查得到。地址从 packument 的 `repository` 推出来（`git+https://github.com/…` → `https://github.com/owner/repo`），**只认 GitHub 这一种形状**——其他任何写法（空、git+ssh、`javascript:`）一律退回 `deepseek-ai/deepseek-harness`，宁可能指错页，也不能变成任意 URL 的跳板。tag 前缀按包名决定（本 monorepo 用 `dsh-v<版本>`，独立包用 `v<版本>`）。
 
 ### 验证
 
-- `test/dashboard.test.mjs` 从 15 条增到 19 条：在飞时的五格与 `aria`、失败时「不指某一步」、空闲与已完成时不出现、轮询与断线文案。
+- `test/dashboard.test.mjs` 从 15 条增到 22 条：在飞时的五格与 `aria`、失败时「不指某一步」、空闲与已完成时不出现、轮询与断线文案、发行说明链接的三个来源（packument 的 repository、恶意的 `javascript:` 退回、up-to-date 时只在抽屉里）。
 - `12/12 test files passed`。
-- 用真状态渲染后在 Edge 无头里核对：安装中（第二格反白）、宿主重启（第三格呼吸 + 断线文案）、失败（整条红）、520px 窄屏（格子收窄、序号隐去）。
+- 用真状态渲染后在 Edge 无头里核对：安装中（第二格反白）、宿主重启（第三格呼吸 + 断线文案）、失败（整条红）、520px 窄屏（格子收窄、序号隐去）、以及有候选版本时的发行说明链接。
 
 ### 降级
 

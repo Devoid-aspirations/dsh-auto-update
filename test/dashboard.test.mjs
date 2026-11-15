@@ -259,3 +259,44 @@ test('the bar polls itself through the restart instead of reporting it as an err
   assert.match(html, /setInterval\(poll, 2500\)/u)
 })
 
+test('release notes for a version follow the repository the packument names', () => {
+  const html = renderDashboard(state({
+    check: {
+      decision: 'update',
+      reason: '0.3.1 is available',
+      checkedAt: 1794749258073,
+      candidate: {
+        version: '0.3.1',
+        tag: 'latest',
+        ageMinutes: 12,
+        repository: { type: 'git', url: 'git+https://github.com/deepseek-ai/deepseek-harness.git' },
+      },
+    },
+  }))
+  assert.match(html, /新版本 <span class="mono" translate="no">0\.3\.1<\/span> 改了什么/u)
+  assert.match(html, /href="https:\/\/github\.com\/deepseek-ai\/deepseek-harness\/releases\/tag\/dsh-v0\.3\.1"/u)
+  assert.match(html, /target="_blank" rel="noreferrer noopener">看官网发行说明 ↗<\/a>/u)
+  // The running version gets its own link inside the details drawer.
+  assert.match(html, /发行说明<\/dt>[\s\S]*?releases\/tag\/dsh-v0\.3\.0/u)
+  assert.match(html, /全部版本 ↗<\/a>/u)
+})
+
+test('a repository the page cannot vouch for falls back instead of becoming a link', () => {
+  const html = renderDashboard(state({
+    check: {
+      decision: 'update',
+      reason: '0.3.1 is available',
+      checkedAt: 1794749258073,
+      candidate: { version: '0.3.1', tag: 'latest', ageMinutes: 12, repository: { url: 'javascript:alert(1)' } },
+    },
+  }))
+  assert.match(html, /href="https:\/\/github\.com\/deepseek-ai\/deepseek-harness\/releases\/tag\/dsh-v0\.3\.1"/u)
+  assert.doesNotMatch(html, /javascript:/u)
+})
+
+test('an up-to-date page keeps the notes link in the drawer, not on the headline', () => {
+  const html = renderDashboard(state())
+  assert.doesNotMatch(html, /<p class="notes">/u)
+  assert.match(html, /发行说明<\/dt>[\s\S]*?releases\/tag\/dsh-v0\.3\.0/u)
+})
+
