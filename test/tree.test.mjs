@@ -81,6 +81,33 @@ test('a tree whose entry file has not landed yet is not complete', (t) => {
   assert.match(verdict.reason, /entry file/u)
 })
 
+test('an entry declared without its extension still counts as present', (t) => {
+  // `ms` declares "main": "./index" and `@eslint-community/regexpp` declares
+  // "main": "index"; both ship index.js. On 2026-11-27 a bare existence check
+  // called those missing, so a finished 0.2.2-rc.5 install was reported as "the
+  // entry file(s) are not on disk yet" and npm was run a second time.
+  const base = mkdtempSync(join(tmpdir(), 'dsh-tree-'))
+  const dir = join(base, ...PACKAGE.split('/'))
+  mkdirSync(join(dir, 'lib'), { recursive: true })
+  writeFileSync(join(dir, 'lib', 'bin.js'), '// entry\n', 'utf8')
+  writeFileSync(
+    join(dir, 'package.json'),
+    `${JSON.stringify({ name: PACKAGE, version: '0.2.2-rc.5', bin: { dsh: 'lib/bin.js' }, dependencies: { ms: '^2.0.0', '@eslint-community/regexpp': '^4.12.0' } })}\n`,
+    'utf8',
+  )
+  const shapes = [['ms', './index'], ['@eslint-community/regexpp', 'index']]
+  for (const [name, main] of shapes) {
+    const target = join(dir, 'node_modules', ...name.split('/'))
+    mkdirSync(target, { recursive: true })
+    writeFileSync(join(target, 'package.json'), `${JSON.stringify({ name, version: '1.0.0', main })}\n`, 'utf8')
+    writeFileSync(join(target, 'index.js'), '// entry\n', 'utf8')
+  }
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+
+  const verdict = inspectTree(dir, PACKAGE, '0.2.2-rc.5')
+  assert.equal(verdict.ok, true, verdict.reason)
+})
+
 test('the wrong version is reported as the wrong version, not as a missing dependency', (t) => {
   const dir = fixture({ version: '0.2.2-rc.3', dependencies: { '@deepseek-ai/cordis': '^4.0.0' } })
   t.after(() => rmSync(join(dir, '..', '..'), { recursive: true, force: true }))

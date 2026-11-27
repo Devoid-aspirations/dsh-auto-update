@@ -12,6 +12,41 @@
 >
 > 还有一件事要写清楚：`0.1.5` **从未打过 tag**，所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退到那一版，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上（`v0.1.6` 与 `v0.1.7` 都已存在）。
 
+## [0.6.3] — 2026-11-27
+
+`0.6.2` 的入口检查把「没写扩展名」当成「文件不在」，于是一次本来成功的安装被判成失败。
+
+### 为什么改
+
+同一天本地 19:43 那次升级（`0.2.2-rc.3` → `0.2.2-rc.5`）装是装上了，过程却很难看：
+
+- `19:47:25` npm 正常结束（`changed 670 packages in 2m`），`19:47:28` 助手却说 `the tree is not complete yet: the entry file(s) are not on disk yet (@eslint-community/regexpp/index, ms/./index, ms/./index, …) — letting npm finish`；
+- 于是 npm 又整装了一遍（`19:49:48` 再次 `changed 670 packages in 2m`，白跑两分钟），结论仍然是「不完整」；
+- `helper.json` 记成 `phase: failed`，`detail` 写着 `0.2.2-rc.3 is serving again` —— 而那一刻真正在服务的是已经装好的 `rc.5`；
+- 助手还多起了一个替换进程（`pid 28792`），它抢不到 3080，退出。
+
+两个原因都在 `0.6.2` 的新代码里：
+
+1. `inspectTree()` 用 `existsSync(join(dir, entry))` 判断入口，但 npm 生态允许省略扩展名 —— `ms` 声明 `"main": "./index"`、`@eslint-community/regexpp` 声明 `"main": "index"`，盘上都是 `index.js`。Node 会补 `.js`，`existsSync` 不会。
+2. `restartInstalledVersion()` 拿 `plan.fromVersion` 去做健康检查。安装已经把目标写进盘里时，替换进程报的是**目标版本**，于是「已在服务」被判成「未验证」，`detail` 还把旧版本号写成在服务的那一个。
+
+### 改了什么
+
+- `lib/tree.js` 新增 `resolvesEntry()`：按 Node 的规则找入口 —— 原样、再依次试 `.js` / `.mjs` / `.cjs` / `.json` / `.node`，路径是目录时试 `index.*`；`inspectTree()` 改用它。同时把树根 `resolve()` 一次，避免调用方传进来的正斜杠让后面的路径前缀比较全部失配（混合分隔符会让 470 个嵌套依赖全被判成「没解包」）。
+- `lib/update-helper.mjs` 的 `restartInstalledVersion()` 先读盘上实际版本再验证，返回 `version`；两处 `detail` 因此写的是真正在服务的那个版本，而不是 `plan.fromVersion`。
+- `lib/npm.js` 的 `stop()` 改用 `killTree()`：Windows 上 `child.kill()` 只打到 `.cmd` 包装层，真正在写树的 npm 会活下来 —— 11-15 那次「npm 装完不退出」和测试里被取消的安装都长出了孤儿进程。现在 `taskkill /T /F /PID` 把包装层和它的子进程一起结束（非 Windows 退回 `SIGKILL`）。这也顺手治了测试收尾：`helper-e2e` 跑完不再留 `fake-npm.mjs` 孤儿。
+
+### 验证
+
+- `test/tree.test.mjs` 10 → 11 例：`"main": "./index"` 与 `"main": "index"` 配 `index.js` 必须算完整；
+- 对真机安装树做只读复核：`inspectTree(<全局 dsh>, '@deepseek-ai/dsh', '0.2.2-rc.5')` → `ok=true`，639 个包、91 个直接依赖全部解析；
+- `test/helper-e2e.test.mjs` 11/11（64 秒），跑完不再残留 `fake-npm.mjs` 进程（跑前跑后计数都是 0 个新增）；
+- 全量 `node test/run.mjs`：13/13 个测试文件通过。
+
+### 回退
+
+退回 `0.6.2` 只需还原 `lib/tree.js` 与 `lib/update-helper.mjs`；那样任何依赖省略扩展名的大版本（`ms`、`regexpp` 这类非常常见）都会在装完之后被判成不完整，白白多跑一遍 npm 并把记录写成失败。
+
 ## [0.6.2] — 2026-11-27
 
 「装完了」的判定再往下一层：不只看文件在不在，先让这棵树真的启动一次。
@@ -475,7 +510,8 @@
 - `npm test`：9 个文件全绿（`9/9 test files passed`），只依赖 `node:` 内置模块，没有第三方依赖、没有安装步骤。
 - 真机实测记录（2026-10-15，插件 `0.1.3` 与 `0.1.5`，harness `0.2.0-rc.2`）：见 `README.md` 的「已验证的事实（本机实测）」—— 组合树包含插件行、状态接口 `globalInstall=true`、桌面端巡检与真机打包（`electron-builder 26.15.3 --win dir` exit 0）、以及两个真机撞出来的坑（产物 `package.json` 带 UTF-8 BOM 被 `JSON.parse` 拒绝；`DSH Desktop.exe` 正在运行时打包被跳过）。**这一节本身没有重新跑过那条真机审计**，记录的是这次审计当时的结论，原样保留在 README 里。
 
-[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.6.0...HEAD
+[未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.6.0...v0.6.2
 [0.6.1]: https://github.com/Devoid-aspirations/dsh-auto-update/commit/2dbe5a5
 [0.6.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.5.2...v0.6.0

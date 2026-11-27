@@ -42,6 +42,8 @@
 
 同一版还补了记录去重：`reconcile()` 的 `confirmed` 分支原先没有「同一条记录只认一次」的守卫，一次卡在 `installing` 的记录会让宿主每 20 秒播报一遍「recording the update as succeeded」。现在是两个分支共用同一个 `recordId` 判断。
 
+`0.6.3` 修的是这道门槛自己的一个误报：入口按 Node 的规则解析（原样、再试 `.js` / `.mjs` / `.cjs` / `.json` / `.node`，目录则试 `index.*`），而不是裸 `existsSync` —— `ms` 声明 `"main": "./index"`、`@eslint-community/regexpp` 声明 `"main": "index"`，盘上都是 `index.js`，裸检查会把这些包判成没装好，进而让一次成功的安装被判失败、npm 白跑一遍。同时树根先 `resolve()` 一次：调用方传正斜杠时，之后的路径前缀比较不会全部失配。替换进程起来后按盘上实际版本验证，`detail` 不会再写错在服务的版本号。
+
 ## 它不做什么（安全边界）
 
 - **不会覆盖非全局安装**：只有在「正在运行的 harness 确实位于 npm 全局根目录」时才动手。源码 checkout / 本地开发目录一律拒绝安装，只保留检测与提示。
