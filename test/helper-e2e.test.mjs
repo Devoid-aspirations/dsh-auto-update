@@ -52,7 +52,7 @@ function readTail(file, bytes = 2000) {
 /**
  * Build the sandbox: a fake global root holding the current version, a fake
  * npm, a running "harness", and a written plan.
- * @param {{failNewVersion?: boolean, npmFails?: boolean, npmLocked?: number, desktop?: boolean, noVersion?: boolean, strictShutdown?: boolean, npmHangsAfterInstall?: boolean}} [options] - which way to break the world.
+ * @param {{failNewVersion?: boolean, npmFails?: boolean, npmLocked?: number, desktop?: boolean, noVersion?: boolean, strictShutdown?: boolean, npmHangsAfterInstall?: boolean, npmSlowDeps?: boolean, brokenTree?: boolean}} [options] - which way to break the world.
  * @returns {Promise<object>} the sandbox handle.
  */
 async function setup(options = {}) {
@@ -65,6 +65,7 @@ async function setup(options = {}) {
     strictShutdown = false,
     npmHangsAfterInstall = false,
     npmSlowDeps = false,
+    brokenTree = false,
   } = options
   const base = mkdtempSync(join(tmpdir(), 'dsh-auto-update-'))
   const root = join(base, 'npmroot')
@@ -92,6 +93,7 @@ async function setup(options = {}) {
     ...(strictShutdown ? { FAKE_SHUTDOWN_STRICT: '1' } : {}),
     ...(npmHangsAfterInstall ? { FAKE_NPM_HANG_AFTER_INSTALL: '1' } : {}),
     ...(npmSlowDeps ? { FAKE_NPM_SLOW_DEPS: '1' } : {}),
+    ...(brokenTree ? { FAKE_NPM_BROKEN_TREE: '1' } : {}),
   }
 
   const host = spawn(process.execPath, [join(harnessDir, 'lib', 'bin.js')], { env, stdio: 'ignore' })
@@ -315,6 +317,27 @@ test('a failed install changes nothing and never stops the running harness', asy
 
   const serving = await box.servingVersion()
   assert.equal(serving?.running, FROM, 'the original process is still serving')
+})
+
+test('a tree that installs but cannot boot never gets the harness stopped', async (t) => {
+  // 2026-11-27: every file-level check passed, the harness was stopped, and the
+  // replacement died in 0.5 s with `ERR_MODULE_NOT_FOUND`. "The files are on
+  // disk" is not "it starts", so the tree is booted before anything is stopped
+  // — and a tree that cannot answer `--version` leaves the running harness alone.
+  const box = await setup({ brokenTree: true })
+  t.after(box.teardown)
+
+  await box.runHelper()
+
+  const state = box.helperState()
+  assert.equal(state.phase, 'failed', `helper phase (log: ${box.readLog().slice(-800)})`)
+  assert.match(String(state.error ?? ''), /does not boot/u)
+  assert.match(String(state.error ?? ''), /ERR_MODULE_NOT_FOUND|module-that-is-not-there/u)
+  assert.equal(box.readShutdownLog(), '', 'the harness was never asked to stop')
+  assert.equal(box.host.exitCode, null, 'and it is still running')
+
+  const serving = await box.servingVersion()
+  assert.equal(serving?.running, FROM, 'the old version is still serving')
 })
 
 test('a locked install tree stops the harness first, then the retry goes through', async (t) => {

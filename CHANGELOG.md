@@ -12,6 +12,39 @@
 >
 > 还有一件事要写清楚：`0.1.5` **从未打过 tag**，所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退到那一版，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上（`v0.1.6` 与 `v0.1.7` 都已存在）。
 
+## [0.6.2] — 2026-11-27
+
+「装完了」的判定再往下一层：不只看文件在不在，先让这棵树真的启动一次。
+
+### 为什么改
+
+同一天晚上又失败了两次（本地 18:24 与 19:01）。`0.6.1` 的守卫已经生效，却仍然不够：
+
+- `19:23:34` 它自己写下 `0.2.2-rc.5 is in the manifest but the tree is still being written (14 of 91 dependency package(s) are not unpacked yet …)`；
+- 12 秒后又判定 `0.2.2-rc.5 is on disk while npm is still running — not waiting for npm to exit`，中止 npm 并启动替换；
+- 替换进程 `exit 1`，那一版留下的 428 KB 启动诊断里全是**嵌套依赖**缺失：`dsh-goal\node_modules\zod\v4\core\util.js` 这种，一个都不在那 91 个直接依赖里；
+- 90 秒验证失败，回滚 `rc.3`（又装了 3 分钟）。
+
+两个具体缺陷：`inspectTree()` 只查一层（`manifest.dependencies` 在盘上就算齐），`treeFingerprint()` 只看 `dsh/node_modules` 的条目数和目录 mtime —— npm 往 `dsh-goal/node_modules/zod/...` 写的时候，这两个数都不动，所谓的「连续两轮指纹不变」是假的稳定。
+
+### 改了什么
+
+- `lib/tree.js` 的 `inspectTree()` 改成**递归**：每个已落盘的包，它自己声明的依赖都必须按 Node 的规则可解析（自己的 `node_modules`，再逐级向上直到安装根），它声明的入口（`main` / `bin` / `exports` 里的字符串，通配符跳过）必须在盘上；`optionalDependencies` 仍然不要求。返回的 `fingerprint` 由这次遍历滚出来（最多 4000 个包），嵌套写入也会让它动。
+- 新增 `probeInstalledTree()`：用 `node <安装目录>/lib/bin.js --version` **真的把盘上那棵树启动一次** —— 加载的模块图和真实启动相同，但不会占端口。45 秒不应答算失败，错误里带上它自己的 `ERR_MODULE_NOT_FOUND`。
+- `watchInstallTree()` 的落地条件变成三段：树完整 → 指纹连续两轮不变 → **能启动**。探不过就继续等 npm，并记一次 `<版本> is on disk but does not boot yet (<原因>) — waiting for npm to finish`。
+- `run()` 在停下宿主之前再探一次：探不过就不停宿主，直接 `phase: failed` 与 `the installed tree does not boot: …`。正在服务的那个进程完全不受影响 —— 这是 11-27 两次失败里代价最大的那一步。
+- `rollback()` 回滚成功后写回 `installedVersion`，`helper.json` 不再一边说「rc.3 在服务」一边把 `installedVersion` 记成 rc.5。
+
+### 验证
+
+- `test/tree.test.mjs` 6 → 10 例：嵌套依赖缺失、hoist 到安装根的嵌套依赖能解析、嵌套包入口缺失、遍历指纹随嵌套写入变化；
+- `test/helper-e2e.test.mjs` 新增 `a tree that installs but cannot boot never gets the harness stopped`（`FAKE_NPM_BROKEN_TREE=1` 让 npm 装出一个 import 指向不存在的 bin）：断言 `phase: failed`、错误里同时有 `does not boot` 与 `ERR_MODULE_NOT_FOUND`、**宿主一次都没被要求停**、旧版本仍在服务；
+- 全量 `node test/run.mjs`：13/13 个测试文件通过（新增 5 例），`helper-e2e` 11/11（约 64 秒）。
+
+### 回退
+
+退回 `0.6.1` 只需还原 `lib/tree.js` 与 `lib/update-helper.mjs`；那样在「直接依赖齐了、嵌套依赖还在解包」的窗口里仍会把宿主停掉，`0.2.2-rc.5` 这类大版本尤其容易踩。
+
 ## [0.6.1] — 2026-11-27
 
 装没装完，按整棵树算，不按 `package.json` 里那个版本号算。
@@ -443,6 +476,8 @@
 - 真机实测记录（2026-10-15，插件 `0.1.3` 与 `0.1.5`，harness `0.2.0-rc.2`）：见 `README.md` 的「已验证的事实（本机实测）」—— 组合树包含插件行、状态接口 `globalInstall=true`、桌面端巡检与真机打包（`electron-builder 26.15.3 --win dir` exit 0）、以及两个真机撞出来的坑（产物 `package.json` 带 UTF-8 BOM 被 `JSON.parse` 拒绝；`DSH Desktop.exe` 正在运行时打包被跳过）。**这一节本身没有重新跑过那条真机审计**，记录的是这次审计当时的结论，原样保留在 README 里。
 
 [未发布]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.6.0...HEAD
+[0.6.2]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.6.0...v0.6.2
+[0.6.1]: https://github.com/Devoid-aspirations/dsh-auto-update/commit/2dbe5a5
 [0.6.0]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Devoid-aspirations/dsh-auto-update/compare/v0.5.0...v0.5.1

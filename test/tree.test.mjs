@@ -9,7 +9,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -111,4 +111,75 @@ test('the fingerprint moves when a dependency is unpacked and settles when nothi
   assert.notEqual(after, before, 'unpacking changes the fingerprint')
 
   assert.equal(treeFingerprint(dir), after, 'and it stops moving once nothing writes')
+})
+
+test('a dependency of a dependency that has not landed is not complete', (t) => {
+  // The 2026-11-27 shape one level deeper: every direct dependency is on disk,
+  // but `dsh-goal/node_modules/zod` was still being unpacked when the harness
+  // was stopped, and the replacement died on `zod/v4/core/util.js`.
+  const dir = fixture({ version: '0.2.2-rc.5', dependencies: { '@deepseek-ai/dsh-goal': '^0.2.2' } })
+  t.after(() => rmSync(join(dir, '..', '..'), { recursive: true, force: true }))
+  const goal = join(dir, 'node_modules', '@deepseek-ai', 'dsh-goal')
+  writeFileSync(
+    join(goal, 'package.json'),
+    JSON.stringify({ name: '@deepseek-ai/dsh-goal', version: '0.2.2', dependencies: { zod: '^4.0.0' } }),
+    'utf8',
+  )
+
+  const verdict = inspectTree(dir, PACKAGE, '0.2.2-rc.5')
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.reason, /nested dependency package/u)
+  assert.match(verdict.reason, /zod/u)
+  assert.deepEqual(verdict.missing, ['@deepseek-ai/dsh-goal → zod'])
+})
+
+test('a hoisted dependency of a dependency resolves, as it does on disk', (t) => {
+  const dir = fixture({ version: '0.2.2-rc.5', dependencies: { '@deepseek-ai/dsh-goal': '^0.2.2' } })
+  t.after(() => rmSync(join(dir, '..', '..'), { recursive: true, force: true }))
+  const goal = join(dir, 'node_modules', '@deepseek-ai', 'dsh-goal')
+  writeFileSync(
+    join(goal, 'package.json'),
+    JSON.stringify({ name: '@deepseek-ai/dsh-goal', version: '0.2.2', dependencies: { zod: '^4.0.0' } }),
+    'utf8',
+  )
+  // npm hoists it to the root instead of nesting it under dsh-goal.
+  const zod = join(dir, 'node_modules', 'zod')
+  mkdirSync(zod, { recursive: true })
+  writeFileSync(join(zod, 'package.json'), JSON.stringify({ name: 'zod', version: '4.0.0' }), 'utf8')
+
+  const verdict = inspectTree(dir, PACKAGE, '0.2.2-rc.5')
+  assert.equal(verdict.ok, true, verdict.reason)
+  assert.ok(verdict.packages >= 3, `walked ${verdict.packages} package(s)`)
+})
+
+test('a nested package whose entry file has not landed is not complete', (t) => {
+  const dir = fixture({ version: '0.2.2-rc.5', dependencies: { '@deepseek-ai/dsh-goal': '^0.2.2' } })
+  t.after(() => rmSync(join(dir, '..', '..'), { recursive: true, force: true }))
+  const goal = join(dir, 'node_modules', '@deepseek-ai', 'dsh-goal')
+  writeFileSync(
+    join(goal, 'package.json'),
+    JSON.stringify({ name: '@deepseek-ai/dsh-goal', version: '0.2.2', main: './lib/index.js' }),
+    'utf8',
+  )
+
+  const verdict = inspectTree(dir, PACKAGE, '0.2.2-rc.5')
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.reason, /entry file/u)
+  assert.deepEqual(verdict.missing, ['@deepseek-ai/dsh-goal/./lib/index.js'])
+})
+
+test('the walk fingerprint moves when a nested package is written', (t) => {
+  const dir = fixture({ version: '0.2.2-rc.5', dependencies: { '@deepseek-ai/dsh-goal': '^0.2.2' } })
+  t.after(() => rmSync(join(dir, '..', '..'), { recursive: true, force: true }))
+  const goal = join(dir, 'node_modules', '@deepseek-ai', 'dsh-goal')
+
+  const before = inspectTree(dir, PACKAGE, '0.2.2-rc.5')
+  assert.equal(before.ok, true, before.reason)
+  assert.notEqual(before.fingerprint, null)
+
+  const later = new Date(Date.now() + 5000)
+  utimesSync(goal, later, later)
+
+  const after = inspectTree(dir, PACKAGE, '0.2.2-rc.5')
+  assert.notEqual(after.fingerprint, before.fingerprint, 'a write to a nested package moves the fingerprint')
 })

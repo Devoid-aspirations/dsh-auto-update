@@ -216,6 +216,11 @@ if (args[0] === 'install') {
     }
   }
   if (process.env.FAKE_NPM_FAIL === '1') { process.stderr.write('E404 fake npm refuses\\n'); process.exit(1) }
+  // Every file-level check can pass on a tree that still cannot boot: the
+  // manifest names the version, the bin exists, and its imports are broken.
+  // That is the 2026-11-27 failure (dsh-app-boot/index.js missing) and the
+  // reason the helper boots the installed tree before it stops anything.
+  const brokenTree = process.env.FAKE_NPM_BROKEN_TREE === '1'
   const spec = args.find((arg) => !arg.startsWith('-') && arg !== 'install' && arg !== '-g')
   const at = spec.lastIndexOf('@')
   const name = spec.slice(0, at)
@@ -226,6 +231,10 @@ if (args[0] === 'install') {
   try { bin = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).bin?.dsh ?? bin } catch {}
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version, type: 'module', bin: { dsh: bin } }, null, 2))
   note('installed ' + name + '@' + version)
+  if (brokenTree) {
+    writeFileSync(join(dir, 'lib', 'bin.js'), "import './module-that-is-not-there.js'\\n", 'utf8')
+    note('left a tree that cannot boot')
+  }
   // A real npm can finish the reify and then fail to exit — a locked descriptor,
   // a wedged cleanup, a wrapper that outlived its child. The tree is already
   // correct at that point, so the helper has to read the disk rather than wait
@@ -280,6 +289,15 @@ const here = dirname(fileURLToPath(import.meta.url))
 const version = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')).version
 const port = Number(process.env.FAKE_PORT)
 const bootId = process.pid + '-' + Date.now()
+
+// The real harness answers \`--version\` and exits; the update helper boots the
+// installed tree this way before it stops the running one, so the fake has to
+// answer it too — and answer it only when the module graph on disk is intact,
+// which is exactly what a half-unpacked tree cannot do.
+if (process.argv.includes('--version')) {
+  process.stdout.write(version + '\\n')
+  process.exit(0)
+}
 
 if (process.env.FAKE_READY_FILE) {
   try { writeFileSync(process.env.FAKE_READY_FILE, String(port)) } catch {}

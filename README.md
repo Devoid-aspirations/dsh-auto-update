@@ -38,6 +38,8 @@
 
 为什么门槛从「版本号」抬到「整棵树」：`0.2.2-rc.5` 那次升级（2026-11-27）npm 先写了 manifest、后解依赖，670 个包装了八分钟；助手在第 6 分钟读到 `0.2.2-rc.5` 就杀掉 npm 去重启，替换进程 0.6 秒后死于 `ERR_MODULE_NOT_FOUND … dsh-app-boot\index.js`，健康检查失败、回滚。版本字段是 npm 写的第一个东西，却是最不该据以收工的那个。若走到重启前发现树仍有缺口（比如 npm 自己提前退出），助手不会带着半棵树启动：它让 npm 再跑完一次（不再提前取消），仍然不齐就记 `phase: failed` 并说明缺什么。
 
+从 `0.6.2` 起这道门槛再抬两级。**第一级是递归**：`inspectTree` 不只看那 91 个直接依赖，还看依赖的依赖 —— `dsh-goal/node_modules/zod` 这种洞在 11-27 第二次失败里正是元凶，一次层检查看不见它；指纹也从「`node_modules` 条目数 + 目录 mtime」换成整次遍历滚出来的值，嵌套目录被写时它会动。**第二级是启动**：三段检查（树完整、两轮稳定、能启动）里的最后一段不再是读文件，而是 `node <安装目录>/lib/bin.js --version` 真跑一次 —— 加载的模块图和真实启动相同，不占端口。起不来就继续等 npm，日志写 `<版本> is on disk but does not boot yet (…) — waiting for npm to finish`；等到 npm 也退出还是起不来，助手**不会去停正在服务的宿主**，直接记 `phase: failed` 与 `the installed tree does not boot: …`。
+
 同一版还补了记录去重：`reconcile()` 的 `confirmed` 分支原先没有「同一条记录只认一次」的守卫，一次卡在 `installing` 的记录会让宿主每 20 秒播报一遍「recording the update as succeeded」。现在是两个分支共用同一个 `recordId` 判断。
 
 ## 它不做什么（安全边界）
