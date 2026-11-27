@@ -230,7 +230,28 @@ if (args[0] === 'install') {
   // a wedged cleanup, a wrapper that outlived its child. The tree is already
   // correct at that point, so the helper has to read the disk rather than wait
   // for a process that will never report.
-  if (process.env.FAKE_NPM_HANG_AFTER_INSTALL === '1') setInterval(() => {}, 1000)
+  //
+  // FAKE_NPM_SLOW_DEPS models the other half of that incident (2026-11-27): the
+  // manifest names the target immediately, the dependency tree follows minutes
+  // later, and npm never exits. Anything that reads only the manifest will call
+  // this installed and start a harness that cannot resolve its own boot chain.
+  if (process.env.FAKE_NPM_SLOW_DEPS === '1') {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({
+      name,
+      version,
+      type: 'module',
+      bin: { dsh: bin },
+      dependencies: { '@deepseek-ai/dsh-app-boot': '^0.2.2' },
+    }, null, 2))
+    note('manifest written, dependencies pending')
+    setTimeout(() => {
+      const dep = join(dir, 'node_modules', '@deepseek-ai', 'dsh-app-boot')
+      mkdirSync(dep, { recursive: true })
+      writeFileSync(join(dep, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-app-boot', version: '0.2.2' }, null, 2))
+      note('unpacked dependency @deepseek-ai/dsh-app-boot')
+    }, 6000)
+    setInterval(() => {}, 1000)
+  } else if (process.env.FAKE_NPM_HANG_AFTER_INSTALL === '1') setInterval(() => {}, 1000)
   else process.exit(0)
 }
 if (args[0] !== 'install') {

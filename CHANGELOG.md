@@ -12,6 +12,39 @@
 >
 > 还有一件事要写清楚：`0.1.5` **从未打过 tag**，所以「`0.1.5`」今天指的是**那个版本号**（`57af5f8` 提交的状态），不是一个标好的发布点 —— 页脚的链接因此指向提交而不是 tag。`0.1.0`–`0.1.4` 连提交都没有留下，也不是本仓库里的发布。**要回退到那一版，退的是提交 `57af5f8`，不是某个 tag。** 从 `0.1.6` 起，每一节都在发版当时写，tag 也在那时才真正打上（`v0.1.6` 与 `v0.1.7` 都已存在）。
 
+## [0.6.1] — 2026-11-27
+
+装没装完，按整棵树算，不按 `package.json` 里那个版本号算。
+
+### 为什么改
+
+2026-11-27 00:24 的自动升级（`0.2.2-rc.3` → `0.2.2-rc.5`）失败了，而且是自己把自己坑掉的：
+
+- npm 先写 manifest、后解依赖，670 个包装了八分钟；
+- 助手的看门狗每 4 秒读一次 manifest，第 6 分钟看到 `0.2.2-rc.5` 就判定「装完了」，`abort()` 掉 npm 去重启；
+- 替换进程 0.6 秒后死于 `ERR_MODULE_NOT_FOUND … dsh-app-boot\index.js`，因为依赖树只解到一半；
+- 健康检查 90 秒等不到服务，回滚到 `rc.3`（回滚又装了 3 分钟）。
+
+版本字段是 npm 写的第一个东西，却是最不该据以收工的那个。
+
+### 改了什么
+
+- 新增 `lib/tree.js`：`treeFingerprint()` 与 `inspectTree()` —— 后者要求版本等于目标、`dependencies` 全部可解析、`main`/`bin` 入口都在盘上（`optionalDependencies` 故意不要求），前者是「这棵树这 4 秒有没有人写」的廉价指纹。
+- `watchInstallTree()`：版本号命中之后还要树完整、且指纹连续两轮（约 8 秒）不变才落地；等待期间记一行 `<版本> is in the manifest but the tree is still being written (<原因>) — waiting for npm to finish`。
+- `installWithSalvage()`：被取消的 npm 不再伪装成 `code: 0` —— 保留原结局并标 `salvaged: true`，取消与否由调用方按树的完整性决定。
+- `run()`：重启宿主之前再核一次树；不齐就让 npm 再跑一次（这一次不提前取消），仍然不齐就记 `phase: failed` 并写清缺什么，绝不带着半棵树启动。
+- `verifyRunning()` 的 `acceptUnverified()`：settle 窗口通过后再查一次 route，把迟到的版本号写进日志，`up but unverified` 不再是一个没有后续的死胡同。
+
+### 验证
+
+- 新增 `test/tree.test.mjs`（6 例）：完整树、manifest 命中但依赖未落盘、入口未落盘、版本不符、全局根缺失、指纹随解包变化；
+- 新增 e2e 回归 `a manifest that names the target before its dependencies land is not an install`（用 `FAKE_NPM_SLOW_DEPS=1` 复刻 11-27 的写入次序）：断言「先等树、再判装完」，且事务最终 `succeeded`、新版本在服务；
+- 全量 `node test/run.mjs`：13/13 个测试文件、132 例全部通过；原有「装完却永不退出」用例仍通过（约 11 秒，等的是 8 秒静默窗口）。
+
+### 回退
+
+退回 `0.6.0` 的判据只需还原 `lib/update-helper.mjs` 并删掉 `lib/tree.js`；那样在慢网络下会重新出现「半棵树就重启」的失败，`0.2.2-rc.5` 这类大版本升级尤其容易踩。
+
 ## [0.6.0] — 2026-11-15
 
 升级过程中页面几乎不反馈：只有一句话说「正在安装」，而真正难熬的是宿主被停掉、浏览器连不上那几秒 —— 页面上只留下一个抓取失败。这一版给升级补上了一条会动的进度条，并且把那几秒的断线**当成设计的一部分**讲给读者听。

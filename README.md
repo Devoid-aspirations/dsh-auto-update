@@ -34,7 +34,9 @@
 
 同一个本地 `npm install -g` 还有第二种卡法，跟锁无关：reify 已经把那棵目录换好（`npm ls -g` 都认新版本了），npm 进程却留在原地不退出、也不再输出 —— `--loglevel=error` 让成功路径一声不响，而助手唯一的成功信号就是 npm 的退出码，于是 `helper.json` 会一直停在 `phase: "installing"`。
 
-从 `0.5.2` 起不看 npm 的脸色，看磁盘：安装期间每 4 秒取一次安装树里的版本，目标版本一出现就判定这次安装成立，取消 npm 并继续往下走（停宿主、验证、起回来）。日志里会写一行 `<版本> is on disk while npm is still running — not waiting for npm to exit`。被取消的 npm 还另有 5 秒硬止损（`spawnCaptured` 的 `signal`），到点强制返回，不再让整个事务挂在 `close` 事件上。
+从 `0.5.2` 起不看 npm 的脸色，看磁盘：安装期间每 4 秒取一次安装树，**但版本号出现不算数** —— 要 `package.json` 的 `version` 等于目标、声明的依赖全部能解析、`main`/`bin` 入口都在盘上（`lib/tree.js` 的 `inspectTree`），并且连续两轮（约 8 秒）指纹不变（`treeFingerprint`），才判定这次安装成立，取消 npm 并继续往下走。日志里会写一行 `<版本> is on disk while npm is still running — not waiting for npm to exit`；树还没写完时先写 `<版本> is in the manifest but the tree is still being written (…) — waiting for npm to finish`。被取消的 npm 还另有 5 秒硬止损（`spawnCaptured` 的 `signal`），到点强制返回，不再让整个事务挂在 `close` 事件上。
+
+为什么门槛从「版本号」抬到「整棵树」：`0.2.2-rc.5` 那次升级（2026-11-27）npm 先写了 manifest、后解依赖，670 个包装了八分钟；助手在第 6 分钟读到 `0.2.2-rc.5` 就杀掉 npm 去重启，替换进程 0.6 秒后死于 `ERR_MODULE_NOT_FOUND … dsh-app-boot\index.js`，健康检查失败、回滚。版本字段是 npm 写的第一个东西，却是最不该据以收工的那个。若走到重启前发现树仍有缺口（比如 npm 自己提前退出），助手不会带着半棵树启动：它让 npm 再跑完一次（不再提前取消），仍然不齐就记 `phase: failed` 并说明缺什么。
 
 同一版还补了记录去重：`reconcile()` 的 `confirmed` 分支原先没有「同一条记录只认一次」的守卫，一次卡在 `installing` 的记录会让宿主每 20 秒播报一遍「recording the update as succeeded」。现在是两个分支共用同一个 `recordId` 判断。
 

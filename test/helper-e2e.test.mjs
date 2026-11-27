@@ -64,6 +64,7 @@ async function setup(options = {}) {
     noVersion = false,
     strictShutdown = false,
     npmHangsAfterInstall = false,
+    npmSlowDeps = false,
   } = options
   const base = mkdtempSync(join(tmpdir(), 'dsh-auto-update-'))
   const root = join(base, 'npmroot')
@@ -90,6 +91,7 @@ async function setup(options = {}) {
     ...(noVersion ? { FAKE_NO_VERSION: '1' } : {}),
     ...(strictShutdown ? { FAKE_SHUTDOWN_STRICT: '1' } : {}),
     ...(npmHangsAfterInstall ? { FAKE_NPM_HANG_AFTER_INSTALL: '1' } : {}),
+    ...(npmSlowDeps ? { FAKE_NPM_SLOW_DEPS: '1' } : {}),
   }
 
   const host = spawn(process.execPath, [join(harnessDir, 'lib', 'bin.js')], { env, stdio: 'ignore' })
@@ -405,6 +407,31 @@ test('the harness is asked to stop through the route it actually guards', async 
 
   assert.equal(box.helperState().phase, 'succeeded')
   assert.equal(box.host.exitCode !== null, true, 'the original host exited on its own')
+})
+
+test('a manifest that names the target before its dependencies land is not an install', async (t) => {
+  // 2026-11-27: npm wrote 0.2.2-rc.5 into the manifest first and was still
+  // unpacking the dependency tree when the helper called it installed, stopped
+  // npm, and restarted. The replacement died in 0.6 s with ERR_MODULE_NOT_FOUND
+  // on dsh-app-boot, and the update was rolled back. The version field is the
+  // first thing npm writes, never the last thing worth reading.
+  const box = await setup({ npmSlowDeps: true })
+  t.after(box.teardown)
+
+  const { code } = await box.runHelper()
+  assert.equal(code, 0)
+
+  const log = box.readLog()
+  const waitingAt = log.indexOf('is in the manifest but the tree is still being written')
+  const salvageAt = log.indexOf('is on disk while npm is still running')
+  assert.ok(waitingAt >= 0, `the manifest was not mistaken for the install (log: ${log.slice(-1200)})`)
+  assert.ok(salvageAt > waitingAt, 'the wait came before the tree was believed')
+
+  assert.equal(box.helperState().phase, 'succeeded', 'the transaction still finished')
+  assert.equal(fixtureVersion(box.root, PACKAGE), TO, 'the tree holds the new version')
+  const serving = await box.servingVersion()
+  assert.equal(serving?.running, TO, 'and a replacement is serving it')
+  assert.notEqual(serving?.bootId, box.currentBoot, 'from a fresh process')
 })
 
 test('an npm that installs and then never exits does not stall the transaction', async (t) => {
